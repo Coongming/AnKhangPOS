@@ -1,0 +1,371 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+// ============================================
+// NHÓM SẢN PHẨM
+// ============================================
+model ProductCategory {
+  id           String    @id @default(cuid())
+  name         String    @unique // Gạo, Nước, Khác
+  deliveryRate Float     @default(0) @map("delivery_rate") // Giá ship/đơn vị (VNĐ)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  products     Product[]
+
+  @@map("product_categories")
+}
+
+// ============================================
+// SẢN PHẨM
+// ============================================
+model Product {
+  id            String          @id @default(cuid())
+  code          String          @unique // Mã sản phẩm
+  name          String          // Tên sản phẩm
+  categoryId    String          @map("category_id")
+  unit          String          // kg, bao, chai, thùng
+  salePrice     Float           @default(0) @map("sale_price") // Giá bán mặc định
+  costPrice     Float           @default(0) @map("cost_price") // Giá vốn BQ hiện tại
+  lastPurchasePrice Float?      @map("last_purchase_price") // Giá nhập gần nhất
+  stock         Float           @default(0) // Tồn kho hiện tại
+  minStock      Float           @default(0) @map("min_stock") // Tồn kho tối thiểu cảnh báo
+  barcode       String?         // Chừa sẵn cho v2
+  isActive      Boolean         @default(true) @map("is_active")
+  linkedStockId String? @map("linked_stock_id")
+  blendTemplateId String? @map("blend_template_id")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  category      ProductCategory @relation(fields: [categoryId], references: [id])
+  blendTemplate BlendTemplate?  @relation("productBlend", fields: [blendTemplateId], references: [id])
+  purchaseItems PurchaseItem[]
+  saleItems     SaleItem[]
+  stockMovements StockMovement[]
+
+  templateOutputs BlendTemplate[] @relation("templateOutput")
+  templateInputs  BlendTemplateItem[] @relation("templateInput")
+  
+  @@map("products")
+}
+
+// ============================================
+// NHÀ CUNG CẤP
+// ============================================
+model Supplier {
+  id        String     @id @default(cuid())
+  code      String     @unique
+  name      String
+  phone     String?
+  address   String?
+  notes     String?
+  debt      Float      @default(0) // Tổng công nợ phải trả
+  isActive  Boolean    @default(true) @map("is_active")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  purchases Purchase[]
+  debtTransactions DebtTransaction[]
+
+  @@map("suppliers")
+}
+
+// ============================================
+// KHÁCH HÀNG
+// ============================================
+model Customer {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  phone     String?
+  address   String?
+  notes     String?
+  debt      Float     @default(0) // Tổng công nợ phải thu
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  sales     Sale[]
+  debtTransactions DebtTransaction[]
+
+  @@map("customers")
+}
+
+// ============================================
+// PHIẾU NHẬP HÀNG
+// ============================================
+model Purchase {
+  id            String         @id @default(cuid())
+  code          String         @unique // Mã phiếu nhập
+  supplierId    String         @map("supplier_id")
+  purchaseDate  DateTime       @default(now()) @map("purchase_date")
+  totalAmount   Float          @default(0) @map("total_amount") // Tổng tiền phiếu
+  paidAmount    Float          @default(0) @map("paid_amount") // Đã trả
+  debtAmount    Float          @default(0) @map("debt_amount") // Còn nợ
+  notes         String?
+  status        String         @default("completed") // completed, cancelled
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  supplier      Supplier       @relation(fields: [supplierId], references: [id])
+  items         PurchaseItem[]
+  debtTransactions DebtTransaction[]
+
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id          String   @id @default(cuid())
+  purchaseId  String   @map("purchase_id")
+  productId   String   @map("product_id")
+  quantity    Float    // Số lượng nhập
+  unitPrice   Float    @map("unit_price") // Giá nhập
+  totalPrice  Float    @map("total_price") // Thành tiền
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  purchase    Purchase @relation(fields: [purchaseId], references: [id])
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("purchase_items")
+}
+
+// ============================================
+// HÓA ĐƠN BÁN HÀNG
+// ============================================
+model Sale {
+  id                 String     @id @default(cuid())
+  code               String     @unique
+  customerId         String?    @map("customer_id")
+  deliveryEmployeeId String?    @map("delivery_employee_id")
+  saleDate           DateTime   @default(now()) @map("sale_date")
+  subtotal           Float      @default(0)
+  discount           Float      @default(0)
+  totalAmount        Float      @default(0) @map("total_amount")
+  totalCost          Float      @default(0) @map("total_cost")
+  paidAmount         Float      @default(0) @map("paid_amount")
+  debtAmount         Float      @default(0) @map("debt_amount")
+  notes              String?
+  paymentMethod      String     @default("cash") @map("payment_method")
+  status             String     @default("completed")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  customer           Customer?  @relation(fields: [customerId], references: [id])
+  deliveryEmployee   Employee?  @relation(fields: [deliveryEmployeeId], references: [id])
+  items              SaleItem[]
+  debtTransactions   DebtTransaction[]
+
+  @@map("sales")
+}
+
+model SaleItem {
+  id          String   @id @default(cuid())
+  saleId      String   @map("sale_id")
+  productId   String   @map("product_id")
+  quantity    Float    // Số lượng bán
+  unitPrice   Float    @map("unit_price") // Đơn giá bán
+  costPrice   Float    @map("cost_price") // Giá vốn tại thời điểm bán
+  discount    Float    @default(0) // Giảm giá dòng
+  totalPrice  Float    @map("total_price") // Thành tiền
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  sale        Sale     @relation(fields: [saleId], references: [id])
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("sale_items")
+}
+
+// ============================================
+// CÔNG NỢ
+// ============================================
+model DebtTransaction {
+  id          String    @id @default(cuid())
+  type        String    // customer_debt, customer_payment, supplier_debt, supplier_payment
+  customerId  String?   @map("customer_id")
+  supplierId  String?   @map("supplier_id")
+  saleId      String?   @map("sale_id")
+  purchaseId  String?   @map("purchase_id")
+  amount      Float     // Số tiền (dương = phát sinh nợ, âm = trả nợ)
+  balanceAfter Float    @map("balance_after") // Số dư sau giao dịch
+  notes       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  supplier    Supplier? @relation(fields: [supplierId], references: [id])
+  sale        Sale?     @relation(fields: [saleId], references: [id])
+  purchase    Purchase? @relation(fields: [purchaseId], references: [id])
+
+  @@map("debt_transactions")
+}
+
+// ============================================
+// BIẾN ĐỘNG KHO
+// ============================================
+model StockMovement {
+  id          String   @id @default(cuid())
+  productId   String   @map("product_id")
+  type        String   // purchase, sale, sale_cancel, purchase_cancel, adjustment
+  quantity    Float    // Dương = nhập, Âm = xuất
+  stockAfter  Float    @map("stock_after") // Tồn kho sau biến động
+  referenceId String?  @map("reference_id") // ID phiếu nhập/hóa đơn
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("stock_movements")
+}
+
+// ============================================
+// DANH MỤC CHI PHÍ
+// ============================================
+model ExpenseCategory {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  expenses  Expense[]
+
+  @@map("expense_categories")
+}
+
+// ============================================
+// CHI PHÍ PHÁT SINH
+// ============================================
+model Expense {
+  id          String          @id @default(cuid())
+  categoryId  String          @map("category_id")
+  amount      Float
+  date        DateTime        @default(now())
+  description String?
+  notes       String?
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+
+  @@map("expenses")
+}
+
+// ============================================
+// NHẬT KÝ BACKUP
+// ============================================
+model BackupLog {
+  id        String   @id @default(cuid())
+  fileName  String   @map("file_name")
+  fileSize  Int?     @map("file_size")
+  type      String   // manual, auto
+  status    String   // success, failed
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("backup_logs")
+}
+
+
+
+// ============================================
+// TRỘN GẠO - MẪU TRỘN
+// ============================================
+model BlendTemplate {
+  id              String               @id @default(cuid())
+  name            String               @unique // Tên mẫu trộn
+  outputProductId String?              @map("output_product_id")
+  notes           String?
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  outputProduct   Product?             @relation("templateOutput", fields: [outputProductId], references: [id])
+  linkedProducts  Product[]            @relation("productBlend")
+  items           BlendTemplateItem[]
+
+  @@map("blend_templates")
+}
+
+model BlendTemplateItem {
+  id         String        @id @default(cuid())
+  templateId String        @map("template_id")
+  productId  String        @map("product_id")
+  quantity   Float         // SL nguyên liệu
+
+  template   BlendTemplate @relation(fields: [templateId], references: [id])
+  product    Product       @relation("templateInput", fields: [productId], references: [id])
+
+  @@map("blend_template_items")
+}
+
+// ============================================
+// NHÂN VIÊN
+// ============================================
+model Employee {
+  id          String          @id @default(cuid())
+  code        String          @unique // NV001, NV002
+  name        String
+  phone       String?
+  salaryType  String          @default("delivery") @map("salary_type") // hourly, delivery, both
+  hourlyRate  Float           @default(0) @map("hourly_rate") // Lương/giờ
+  deliveryRate Float          @default(0) @map("delivery_rate") // Lương/bình (đơn vị)
+  isActive    Boolean         @default(true) @map("is_active")
+  notes       String?
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  shifts          EmployeeShift[]
+  deliverySales   Sale[]
+  salaryPayments  SalaryPayment[]
+
+  @@map("employees")
+}
+
+// Ca làm việc nhân viên
+model EmployeeShift {
+  id          String   @id @default(cuid())
+  employeeId  String   @map("employee_id")
+  date        DateTime // Ngày làm
+  startTime   String   @map("start_time") // "07:00"
+  endTime     String   @map("end_time") // "10:00"
+  hours       Float    // Số giờ = end - start
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  employee    Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("employee_shifts")
+}
+
+// Thanh toán lương
+model SalaryPayment {
+  id          String   @id @default(cuid())
+  employeeId  String   @map("employee_id")
+  periodType  String   @map("period_type") // daily, weekly, monthly
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+  hourlyPay   Float    @default(0) @map("hourly_pay")
+  deliveryPay Float    @default(0) @map("delivery_pay")
+  totalPay    Float    @default(0) @map("total_pay")
+  type        String   @default("salary") // salary, advance (ứng lương)
+  expenseId   String?  @map("expense_id") // Link đến chi phí tự tạo
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  employee    Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("salary_payments")
+}
+
+// ============================================
+// CÀI ĐẶT HỆ THỐNG
+// ============================================
+model SystemSetting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+
+  @@map("system_settings")
+}
