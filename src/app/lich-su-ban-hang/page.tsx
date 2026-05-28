@@ -237,7 +237,7 @@ export default function SalesHistoryPage() {
       ) : (
         <div className="table-wrapper">
           <table className="table">
-            <thead><tr><th>Mã</th><th>Ngày</th><th>Khách hàng</th><th>Thanh toán</th><th className="text-right">Tổng tiền</th><th className="text-right">Đã trả</th><th className="text-right">Còn nợ</th><th>Trạng thái</th><th className="text-center">Thao tác</th></tr></thead>
+            <thead><tr><th>Mã</th><th>Ngày</th><th>Khách hàng</th><th>Thanh toán</th><th>Sản phẩm</th><th className="text-right">Tổng tiền</th><th className="text-right">Còn nợ</th><th>Trạng thái</th><th className="text-center">Thao tác</th></tr></thead>
             <tbody>
               {sales.map(s => (
                 <tr key={s.id} style={{ opacity: s.status === 'cancelled' ? 0.5 : 1 }}>
@@ -245,8 +245,8 @@ export default function SalesHistoryPage() {
                   <td>{formatDate(s.saleDate)}</td>
                   <td>{s.customer?.name || 'Khách lẻ'}</td>
                   <td><span className={`badge ${s.paymentMethod === 'cash' ? 'badge-info' : 'badge-accent'}`}>{s.paymentMethod === 'cash' ? '💵 Tiền mặt' : '🏦 Chuyển khoản'}</span></td>
+                  <td style={{ fontSize: 12, maxWidth: 260, whiteSpace: 'normal', lineHeight: 1.4 }}>{s.items.map(it => `${it.product.name} x${it.quantity}`).join(', ')}</td>
                   <td className="text-right font-bold">{formatCurrency(s.totalAmount)}</td>
-                  <td className="text-right text-success">{formatCurrency(s.paidAmount)}</td>
                   <td className="text-right" style={{ color: s.debtAmount > 0 ? 'var(--warning)' : 'var(--text-muted)', fontWeight: s.debtAmount > 0 ? 700 : 400 }}>{formatCurrency(s.debtAmount)}</td>
                   <td><span className={`badge ${s.status === 'completed' ? 'badge-success' : 'badge-danger'}`}>{s.status === 'completed' ? 'Hoàn thành' : 'Đã hủy'}</span></td>
                   <td className="text-center">
