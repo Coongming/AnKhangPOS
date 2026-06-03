@@ -42,6 +42,8 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
     if (!invoiceRef.current) return;
     setDownloading(true);
     try {
+      // Đợi font tải xong trước khi chụp
+      await document.fonts.ready;
       const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(invoiceRef.current, {
         scale: 2,
@@ -100,7 +102,7 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
             color: '#1a1a1a',
             padding: 24,
             borderRadius: 8,
-            fontFamily: 'Arial, sans-serif',
+            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif",
             fontSize: 14,
           }}>
             {/* Logo & Tên cửa hàng */}

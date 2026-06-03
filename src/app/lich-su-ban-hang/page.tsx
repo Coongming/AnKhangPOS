@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Receipt, Eye, XCircle, Trash2, Edit3, Search, Plus, Copy } from 'lucide-react';
+import { Receipt, Eye, XCircle, Trash2, Edit3, Search, Plus, Copy, FileText } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency, formatDate, formatDateTime, formatOrderForCopy } from '@/lib/utils';
+import InvoiceModal from '@/components/InvoiceModal';
 
 interface Product { id: string; code: string; name: string; unit: string; salePrice: number; stock: number; }
 interface Customer { id: string; code: string; name: string; }
@@ -42,6 +43,10 @@ export default function SalesHistoryPage() {
   const [editDiscount, setEditDiscount] = useState('');
   const [editPaidAmount, setEditPaidAmount] = useState('');
   const [editSearchProduct, setEditSearchProduct] = useState('');
+
+  // Invoice state
+  const [invoiceData, setInvoiceData] = useState<any>(null);
+  const [showInvoice, setShowInvoice] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -103,6 +108,44 @@ export default function SalesHistoryPage() {
       if (!res.ok) throw new Error((await res.json()).error);
       showToast('success', 'Đã xóa hóa đơn'); fetchData();
     } catch (err) { showToast('error', err instanceof Error ? err.message : 'Lỗi'); }
+  };
+
+  // --- Invoice ---
+  const openInvoice = async (sale: Sale) => {
+    // Fetch customer debt realtime
+    let customerDebt = 0;
+    if (sale.customerId) {
+      try {
+        const res = await fetch(`/api/customers`);
+        const custs = await res.json();
+        const cust = custs.find((c: any) => c.id === sale.customerId);
+        if (cust) customerDebt = cust.debt || 0;
+      } catch { /* fallback to 0 */ }
+    }
+
+    setInvoiceData({
+      code: sale.code,
+      saleDate: sale.saleDate,
+      customerName: sale.customer?.name || null,
+      customerPhone: sale.customer?.phone || null,
+      paymentMethod: sale.paymentMethod,
+      items: sale.items.map(it => ({
+        name: it.product.name,
+        unit: it.product.unit,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        discount: it.discount,
+        totalPrice: it.totalPrice,
+      })),
+      subtotal: sale.subtotal,
+      discount: sale.discount,
+      totalAmount: sale.totalAmount,
+      paidAmount: sale.paidAmount,
+      debtAmount: sale.debtAmount,
+      customerDebt,
+      notes: sale.notes || null,
+    });
+    setShowInvoice(true);
   };
 
   // --- Edit ---
@@ -171,7 +214,16 @@ export default function SalesHistoryPage() {
       });
       if (!res.ok) throw new Error((await res.json()).error);
       showToast('success', 'Đã cập nhật hóa đơn');
-      setEditSale(null); fetchData();
+      setEditSale(null);
+      await fetchData();
+      // Tự động mở hóa đơn mới sau khi sửa
+      const updatedRes = await fetch(`/api/sales?${new URLSearchParams({
+        ...(dateFrom && { dateFrom }),
+        ...(dateTo && { dateTo }),
+      })}`);
+      const updatedSales: Sale[] = await updatedRes.json();
+      const updatedSale = updatedSales.find(s => s.id === editSale.id);
+      if (updatedSale) openInvoice(updatedSale);
     } catch (err) { showToast('error', err instanceof Error ? err.message : 'Lỗi'); }
   };
 
@@ -182,6 +234,10 @@ export default function SalesHistoryPage() {
   const totalRevenue = sales.filter(s => s.status === 'completed').reduce((sum, s) => sum + s.totalAmount, 0);
 
   return (
+    <>
+      {showInvoice && invoiceData && (
+        <InvoiceModal invoice={invoiceData} onClose={() => setShowInvoice(false)} />
+      )}
     <div>
       <div style={{ marginBottom: 24 }}>
         <h2 style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-heading)' }}>Lịch sử bán hàng</h2>
@@ -252,6 +308,7 @@ export default function SalesHistoryPage() {
                   <td className="text-center">
                     <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                       <button className="btn btn-ghost btn-sm" onClick={() => setViewSale(s)} title="Xem"><Eye size={14} /></button>
+                      {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openInvoice(s)} title="Xuất HĐ" style={{ color: 'var(--accent)' }}><FileText size={14} /></button>}
                       <button className="btn btn-ghost btn-sm" onClick={() => handleCopyOrder(s)} title="Copy đơn"><Copy size={14} /></button>
                       {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="Sửa"><Edit3 size={14} /></button>}
                       {s.status === 'completed' && <button className="btn btn-ghost btn-sm text-danger" onClick={() => handleCancel(s)} title="Hủy"><XCircle size={14} /></button>}
@@ -293,6 +350,13 @@ export default function SalesHistoryPage() {
                 {viewSale.debtAmount > 0 && <div className="text-warning">Còn nợ: <strong>{formatCurrency(viewSale.debtAmount)}</strong></div>}
               </div>
               {viewSale.notes && <div style={{ marginTop: 12 }} className="text-muted">Ghi chú: {viewSale.notes}</div>}
+              {viewSale.status === 'completed' && (
+                <div style={{ marginTop: 16, textAlign: 'center' }}>
+                  <button className="btn btn-primary" onClick={() => { setViewSale(null); openInvoice(viewSale); }}>
+                    <FileText size={16} style={{ marginRight: 6 }} /> Xuất hóa đơn
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -396,5 +460,6 @@ export default function SalesHistoryPage() {
         </div>
       )}
     </div>
+    </>
   );
 }
