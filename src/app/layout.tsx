@@ -3,6 +3,20 @@ import './globals.css';
 import Sidebar from '@/components/Sidebar';
 import { ToastProvider } from '@/components/Toast';
 import { cookies } from 'next/headers';
+import { Inter, Shrikhand } from 'next/font/google';
+
+const inter = Inter({
+  subsets: ['latin', 'vietnamese'],
+  weight: ['300', '400', '500', '600', '700', '800'],
+  display: 'swap',
+});
+
+const shrikhand = Shrikhand({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+  variable: '--font-shrikhand',
+});
 
 export const metadata: Metadata = {
   title: 'An Khang - Quản lý bán hàng',
@@ -18,7 +32,7 @@ export default async function RootLayout({
   const isLoggedIn = !!cookieStore.get('auth_token');
 
   return (
-    <html lang="vi">
+    <html lang="vi" className={`${inter.className} ${shrikhand.variable}`}>
       <body>
         <ToastProvider>
           {isLoggedIn ? (
