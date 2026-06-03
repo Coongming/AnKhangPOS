@@ -3,7 +3,7 @@ import './globals.css';
 import Sidebar from '@/components/Sidebar';
 import { ToastProvider } from '@/components/Toast';
 import { cookies } from 'next/headers';
-import { Inter, Shrikhand } from 'next/font/google';
+import { Inter, Shrikhand, Dancing_Script } from 'next/font/google';
 
 const inter = Inter({
   subsets: ['latin', 'vietnamese'],
@@ -16,6 +16,13 @@ const shrikhand = Shrikhand({
   weight: '400',
   display: 'swap',
   variable: '--font-shrikhand',
+});
+
+const dancingScript = Dancing_Script({
+  subsets: ['latin', 'vietnamese'],
+  weight: ['700'],
+  display: 'swap',
+  variable: '--font-dancing',
 });
 
 export const metadata: Metadata = {
@@ -32,7 +39,7 @@ export default async function RootLayout({
   const isLoggedIn = !!cookieStore.get('auth_token');
 
   return (
-    <html lang="vi" className={`${inter.className} ${shrikhand.variable}`}>
+    <html lang="vi" className={`${inter.className} ${shrikhand.variable} ${dancingScript.variable}`}>
       <body>
         <ToastProvider>
           {isLoggedIn ? (

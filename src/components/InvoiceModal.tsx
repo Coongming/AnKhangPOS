@@ -108,7 +108,9 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
             {/* Logo & Tên cửa hàng */}
             <div style={{ textAlign: 'center', marginBottom: 16, borderBottom: '2px solidrgb(184, 6, 6)', paddingBottom: 16 }}>
               <img src="/logo.png" alt="Logo" style={{ width: 64, height: 64, borderRadius: 12, objectFit: 'contain', margin: '0 auto 8px', display: 'block' }} />
-              <div style={{ fontSize: 24, fontWeight: 800, color: '#e53e3e', fontFamily: 'var(--font-shrikhand), cursive' }}>Gạo Nước An Khang</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: '#e53e3e', lineHeight: 1.2 }}>
+                Gạo Nước <span style={{ fontFamily: 'var(--font-shrikhand), cursive' }}>An Khang</span>
+              </div>
               <div style={{ fontSize: 14, color: '#666', marginTop: 2, fontWeight: 700 }}>Gạo Sạch & Nước Uống Chính Hãng</div>
               <div style={{ fontSize: 13, color: '#999', marginTop: 2, fontWeight: 700 }}>📍 424 Lê Duẩn, Phường Ea Kao, Đăk Lăk</div>
               <div style={{ fontSize: 16, color: '#e53e3e', fontWeight: 800, marginTop: 4 }}>📞 0943.956.171 - 0342.262.003</div>
