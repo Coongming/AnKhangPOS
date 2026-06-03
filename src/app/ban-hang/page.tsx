@@ -206,6 +206,7 @@ if (status !== 'pending') {
     totalAmount: _totalAmount,
     paidAmount: _paid,
     debtAmount: _debtAmount,
+    customerDebt: _customer ? (_customer.debt || 0) + _debtAmount : 0,
     notes: _notes || null,
   });
 }
@@ -480,10 +481,11 @@ if (status !== 'pending') {
                   <tr>
                     <th style={{ width: 30 }}>#</th>
                     <th>Sản phẩm</th>
-                    <th style={{ width: 130 }}>Đơn giá</th>
-                    <th style={{ width: 130 }}>Số lượng</th>
-                    <th style={{ width: 100 }}>Giảm</th>
-                    <th className="text-right" style={{ width: 120 }}>Thành tiền</th>
+                    <th style={{ width: 120 }}>Đơn giá</th>
+                    <th style={{ width: 120 }}>Số lượng</th>
+                    <th style={{ width: 110 }}>Tiền</th>
+                    <th style={{ width: 90 }}>Giảm</th>
+                    <th className="text-right" style={{ width: 110 }}>Thành tiền</th>
                     <th style={{ width: 40 }}></th>
                   </tr>
                 </thead>
@@ -503,9 +505,12 @@ if (status !== 'pending') {
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             <button className="btn btn-ghost btn-sm" onClick={() => updateQty(item.productId, -1)} style={{ padding: 4 }}><Minus size={14} /></button>
-                            <input className="form-input" type="number" min="1" value={item.quantity} onChange={(e) => updateCartField(item.productId, 'quantity', parseInt(e.target.value) || 1)} style={{ textAlign: 'center', width: 55 }} />
+                            <input className="form-input" type="number" min="0.01" step="any" value={item.quantity} onChange={(e) => updateCartField(item.productId, 'quantity', parseFloat(e.target.value) || 0.01)} style={{ textAlign: 'center', width: 55 }} />
                             <button className="btn btn-ghost btn-sm" onClick={() => updateQty(item.productId, 1)} style={{ padding: 4 }}><Plus size={14} /></button>
                           </div>
+                        </td>
+                        <td>
+                          <input className="form-input" type="number" min="0" step="1000" placeholder="VD: 30000" value={Math.round(item.quantity * item.unitPrice) || ''} onChange={(e) => { const amount = parseFloat(e.target.value) || 0; if (item.unitPrice > 0) { updateCartField(item.productId, 'quantity', Math.round((amount / item.unitPrice) / 0.005) * 0.005); } }} style={{ textAlign: 'right', fontSize: 12 }} />
                         </td>
                         <td>
                           <input className="form-input" type="number" min="0" value={item.discount} onChange={(e) => updateCartField(item.productId, 'discount', parseFloat(e.target.value) || 0)} style={{ textAlign: 'right' }} />

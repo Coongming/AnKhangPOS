@@ -47,7 +47,8 @@ model Product {
   purchaseItems PurchaseItem[]
   saleItems     SaleItem[]
   stockMovements StockMovement[]
-
+  blendOutputs  BlendHistory[]  @relation("blendOutput")
+  blendInputs   BlendHistoryItem[] @relation("blendInput")
   templateOutputs BlendTemplate[] @relation("templateOutput")
   templateInputs  BlendTemplateItem[] @relation("templateInput")
   
@@ -268,6 +269,37 @@ model BackupLog {
   @@map("backup_logs")
 }
 
+// ============================================
+// TRỘN GẠO - LỊCH SỬ
+// ============================================
+model BlendHistory {
+  id              String             @id @default(cuid())
+  code            String             @unique // Mã phiếu trộn: TR001, TR002
+  outputProductId String             @map("output_product_id")
+  outputQuantity  Float              @map("output_quantity") // Tổng SL đầu ra
+  outputCostPrice Float              @map("output_cost_price") // Giá vốn BQ đầu ra
+  notes           String?
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  outputProduct   Product            @relation("blendOutput", fields: [outputProductId], references: [id])
+  items           BlendHistoryItem[]
+
+  @@map("blend_history")
+}
+
+model BlendHistoryItem {
+  id            String       @id @default(cuid())
+  blendId       String       @map("blend_id")
+  productId     String       @map("product_id")
+  quantity      Float        // SL nguyên liệu
+  costPrice     Float        @map("cost_price") // Giá vốn tại thời điểm trộn
+
+  blend         BlendHistory @relation(fields: [blendId], references: [id])
+  product       Product      @relation("blendInput", fields: [productId], references: [id])
+
+  @@map("blend_history_items")
+}
+
 
 
 // ============================================
@@ -368,4 +400,19 @@ model SystemSetting {
   value String
 
   @@map("system_settings")
+}
+
+// ============================================
+// TÀI KHOẢN ĐĂNG NHẬP
+// ============================================
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String   // bcrypt hash
+  role      String   @default("admin") // admin, staff (mở rộng sau)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
 }

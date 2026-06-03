@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { generateCode } from '@/lib/utils';
+import { recalcSupplierDebt } from '@/lib/debt-utils';
 
 // Tính giá vốn bình quân đơn giản: Tổng giá trị nhập / Tổng SL nhập
 async function calculateSimpleAvgCost(tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0], productId: string): Promise<number> {
@@ -117,26 +118,8 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      if (debtAmount > 0) {
-        const supplier = await tx.supplier.findUnique({ where: { id: supplierId } });
-        if (!supplier) throw new Error('Nhà cung cấp không tồn tại');
-
-        await tx.supplier.update({
-          where: { id: supplierId },
-          data: { debt: { increment: debtAmount } },
-        });
-
-        await tx.debtTransaction.create({
-          data: {
-            type: 'supplier_debt',
-            supplierId,
-            purchaseId: newPurchase.id,
-            amount: debtAmount,
-            balanceAfter: supplier.debt + debtAmount,
-            notes: `Công nợ phiếu nhập ${code}`,
-          },
-        });
-      }
+      // Supplier debt — tính lại từ nguồn
+      await recalcSupplierDebt(tx, supplierId);
 
       return newPurchase;
     });
@@ -186,15 +169,7 @@ export async function PUT(request: NextRequest) {
           });
         }
 
-        // 2. REVERSE old supplier debt
-        if (purchase.debtAmount > 0) {
-          await tx.supplier.update({
-            where: { id: purchase.supplierId },
-            data: { debt: { decrement: purchase.debtAmount } },
-          });
-        }
-
-        // 3. Delete old items & related records
+        // 2. Delete old items & related records (debt tính lại ở cuối)
         await tx.debtTransaction.deleteMany({ where: { purchaseId: id } });
         await tx.stockMovement.deleteMany({ where: { referenceId: id } });
         await tx.purchaseItem.deleteMany({ where: { purchaseId: id } });
@@ -263,27 +238,11 @@ export async function PUT(request: NextRequest) {
           });
         }
 
-        // 7. New supplier debt
-        if (debtAmount > 0) {
-          const supplier = await tx.supplier.findUnique({ where: { id: newSupplierId } });
-          if (!supplier) throw new Error('NCC không tồn tại');
-
-          await tx.supplier.update({
-            where: { id: newSupplierId },
-            data: { debt: { increment: debtAmount } },
-          });
-
-          await tx.debtTransaction.create({
-            data: {
-              type: 'supplier_debt',
-              supplierId: newSupplierId,
-              purchaseId: id,
-              amount: debtAmount,
-              balanceAfter: supplier.debt + debtAmount,
-              notes: `Công nợ phiếu nhập ${purchase.code} (sửa)`,
-            },
-          });
+        // 7. Recalc supplier debt từ nguồn
+        if (purchase.supplierId !== newSupplierId) {
+          await recalcSupplierDebt(tx, purchase.supplierId);
         }
+        await recalcSupplierDebt(tx, newSupplierId);
       });
 
       return NextResponse.json({ success: true });
@@ -323,26 +282,8 @@ export async function PUT(request: NextRequest) {
           });
         }
 
-        if (purchase.debtAmount > 0) {
-          const supplier = await tx.supplier.findUnique({ where: { id: purchase.supplierId } });
-          if (supplier) {
-            await tx.supplier.update({
-              where: { id: purchase.supplierId },
-              data: { debt: { decrement: purchase.debtAmount } },
-            });
-
-            await tx.debtTransaction.create({
-              data: {
-                type: 'supplier_payment',
-                supplierId: purchase.supplierId,
-                purchaseId: id,
-                amount: -purchase.debtAmount,
-                balanceAfter: supplier.debt - purchase.debtAmount,
-                notes: `Hủy phiếu nhập ${purchase.code} - hoàn nợ`,
-              },
-            });
-          }
-        }
+        // Recalc supplier debt từ nguồn
+        await recalcSupplierDebt(tx, purchase.supplierId);
       });
 
       return NextResponse.json({ success: true });
@@ -391,22 +332,16 @@ export async function DELETE(request: NextRequest) {
             },
           });
         }
-
-        if (purchase.debtAmount > 0) {
-          const supplier = await tx.supplier.findUnique({ where: { id: purchase.supplierId } });
-          if (supplier) {
-            await tx.supplier.update({
-              where: { id: purchase.supplierId },
-              data: { debt: { decrement: purchase.debtAmount } },
-            });
-          }
-        }
       }
 
+      // Delete related records then purchase
       await tx.debtTransaction.deleteMany({ where: { purchaseId: id } });
       await tx.stockMovement.deleteMany({ where: { referenceId: id } });
       await tx.purchaseItem.deleteMany({ where: { purchaseId: id } });
       await tx.purchase.delete({ where: { id } });
+
+      // Recalc supplier debt
+      await recalcSupplierDebt(tx, purchase.supplierId);
     });
 
     return NextResponse.json({ success: true });

@@ -25,6 +25,7 @@ interface InvoiceData {
   totalAmount: number;
   paidAmount: number;
   debtAmount: number;
+  customerDebt: number; // Công nợ cũ trước đơn này
   notes: string | null;
 }
 
@@ -104,17 +105,12 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
           }}>
             {/* Logo & Tên cửa hàng */}
             <div style={{ textAlign: 'center', marginBottom: 16, borderBottom: '2px solidrgb(184, 6, 6)', paddingBottom: 16 }}>
-              <div style={{
-                width: 48, height: 48, borderRadius: 12,
-                background: '#fe1420',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 20, fontWeight: 800, color: '#fff',
-                margin: '0 auto 8px',
-            }}>AK</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#e53e3e' }}>AN KHANG</div>
-            <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>Gạo & Nước uống</div>
-            <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>📍 591, Nguyễn Xiển, Long Bình, TP.HCM</div>
-          </div>
+              <img src="/logo.png" alt="Logo" style={{ width: 64, height: 64, borderRadius: 12, objectFit: 'contain', margin: '0 auto 8px', display: 'block' }} />
+              <div style={{ fontSize: 24, fontWeight: 800, color: '#e53e3e' }}>GẠO NƯỚC AN KHANG</div>
+              <div style={{ fontSize: 14, color: '#666', marginTop: 2 }}>Gạo sạch & Nước uống chính hãng</div>
+              <div style={{ fontSize: 13, color: '#999', marginTop: 2 }}>📍 424 Lê Duẩn, Phường Ea Kao, Đăk Lăk</div>
+              <div style={{ fontSize: 16, color: '#e53e3e', fontWeight: 600, marginTop: 4 }}>📞 0943956171 - 0342262003</div>
+            </div>
 
             {/* Thông tin đơn */}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, fontSize: 13 }}>
@@ -190,12 +186,18 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
                   <span style={{ color: '#22c55e', fontWeight: 600 }}>{formatCurrency(invoice.paidAmount)}</span>
                 </div>
               )}
-              {invoice.debtAmount > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, color: '#e53e3e', fontWeight: 600 }}>
-                  <span>Còn nợ:</span>
-                  <span>{formatCurrency(invoice.debtAmount)}</span>
-                </div>
-              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, color: '#e53e3e', fontWeight: 600 }}>
+                <span>Nợ đơn này:</span>
+                <span>{formatCurrency(invoice.debtAmount)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, color: '#999', fontSize: 13 }}>
+                <span>Công nợ cũ:</span>
+                <span>{formatCurrency(Math.max(0, (invoice.customerDebt || 0) - invoice.debtAmount))}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, color: '#e53e3e', fontWeight: 700, fontSize: 15, borderTop: '1px dashed #fca5a5', paddingTop: 6 }}>
+                <span>Dư nợ còn lại:</span>
+                <span>{formatCurrency(invoice.customerDebt || 0)}</span>
+              </div>
             </div>
 
             {/* Ghi chú */}
@@ -206,8 +208,8 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
             )}
 
             {/* Footer */}
-            <div style={{ marginTop: 16, textAlign: 'center', fontSize: 16, color: '#999', borderTop: '1px dashed #ddd', paddingTop: 12 }}>
-            <span style={{ color: '#e53e3e', fontWeight: 600 }}>HOTLINE: 0909.276.723</span> — Cảm ơn quý khách!
+            <div style={{ marginTop: 16, textAlign: 'center', borderTop: '1px dashed #ddd', paddingTop: 12 }}>
+              <div style={{ color: '#999', fontSize: 13, fontWeight: 700 }}>Cảm ơn quý khách!</div>
             </div>
           </div>
         </div>

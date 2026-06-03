@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { generateCode } from '@/lib/utils';
 import { checkStockForProduct, deductStockForProduct, reverseStockForProduct } from '@/lib/stock-operations';
+import { recalcCustomerDebt } from '@/lib/debt-utils';
 
 // GET - List sales
 export async function GET(request: NextRequest) {
@@ -139,26 +140,9 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 3. Customer debt (skip cho pending)
-      if (!isPending && debtAmount > 0 && customerId) {
-        const customer = await tx.customer.findUnique({ where: { id: customerId } });
-        if (!customer) throw new Error('Khách hàng không tồn tại');
-
-        await tx.customer.update({
-          where: { id: customerId },
-          data: { debt: { increment: debtAmount } },
-        });
-
-        await tx.debtTransaction.create({
-          data: {
-            type: 'customer_debt',
-            customerId,
-            saleId: newSale.id,
-            amount: debtAmount,
-            balanceAfter: customer.debt + debtAmount,
-            notes: `Công nợ hóa đơn ${code}`,
-          },
-        });
+      // 3. Customer debt (skip cho pending) — tính lại từ nguồn
+      if (!isPending && customerId) {
+        await recalcCustomerDebt(tx, customerId);
       }
 
       return newSale;
@@ -213,15 +197,7 @@ export async function PUT(request: NextRequest) {
           await reverseStockForProduct(tx, oldItem.productId, oldItem.quantity, id, `Sửa HĐ (hoàn kho) - ${sale.code}`);
         }
 
-        // 2. REVERSE old debt
-        if (sale.debtAmount > 0 && sale.customerId) {
-          await tx.customer.update({
-            where: { id: sale.customerId },
-            data: { debt: { decrement: sale.debtAmount } },
-          });
-        }
-
-        // 3. Delete old items & related records
+        // 2. Delete old items & related records (debt sẽ tính lại ở cuối)
         await tx.debtTransaction.deleteMany({ where: { saleId: id } });
         await tx.stockMovement.deleteMany({ where: { referenceId: id } });
         await tx.saleItem.deleteMany({ where: { saleId: id } });
@@ -290,26 +266,13 @@ export async function PUT(request: NextRequest) {
           await deductStockForProduct(tx, item.productId, item.quantity, id, `Sửa hóa đơn - ${sale.code}`, allowNegative);
         }
 
-        // 7. New debt
-        if (newDebtAmount > 0 && newCustomerId) {
-          const customer = await tx.customer.findUnique({ where: { id: newCustomerId } });
-          if (!customer) throw new Error('Khách hàng không tồn tại');
-
-          await tx.customer.update({
-            where: { id: newCustomerId },
-            data: { debt: { increment: newDebtAmount } },
-          });
-
-          await tx.debtTransaction.create({
-            data: {
-              type: 'customer_debt',
-              customerId: newCustomerId,
-              saleId: id,
-              amount: newDebtAmount,
-              balanceAfter: customer.debt + newDebtAmount,
-              notes: `Công nợ hóa đơn ${sale.code} (sửa)`,
-            },
-          });
+        // 7. Recalc debt — tính lại từ nguồn
+        // Nếu đổi khách hàng, cần tính lại cả khách cũ
+        if (sale.customerId && sale.customerId !== newCustomerId) {
+          await recalcCustomerDebt(tx, sale.customerId);
+        }
+        if (newCustomerId) {
+          await recalcCustomerDebt(tx, newCustomerId);
         }
       });
 
@@ -362,26 +325,9 @@ export async function PUT(request: NextRequest) {
           await deductStockForProduct(tx, item.productId, item.quantity, id, `Bán hàng (hoàn thành đơn chờ) - ${sale.code}`, allowNegative);
         }
 
-        // 3. Customer debt
-        if (debtAmount > 0 && sale.customerId) {
-          const customer = await tx.customer.findUnique({ where: { id: sale.customerId } });
-          if (!customer) throw new Error('Khách hàng không tồn tại');
-
-          await tx.customer.update({
-            where: { id: sale.customerId },
-            data: { debt: { increment: debtAmount } },
-          });
-
-          await tx.debtTransaction.create({
-            data: {
-              type: 'customer_debt',
-              customerId: sale.customerId,
-              saleId: id,
-              amount: debtAmount,
-              balanceAfter: customer.debt + debtAmount,
-              notes: `Công nợ hóa đơn ${sale.code} (đơn chờ)`,
-            },
-          });
+        // 3. Customer debt — tính lại từ nguồn
+        if (sale.customerId) {
+          await recalcCustomerDebt(tx, sale.customerId);
         }
       });
 
@@ -408,25 +354,9 @@ export async function PUT(request: NextRequest) {
           }
         }
 
-        if (sale.debtAmount > 0 && sale.customerId) {
-          const customer = await tx.customer.findUnique({ where: { id: sale.customerId } });
-          if (customer) {
-            await tx.customer.update({
-              where: { id: sale.customerId },
-              data: { debt: { decrement: sale.debtAmount } },
-            });
-
-            await tx.debtTransaction.create({
-              data: {
-                type: 'customer_payment',
-                customerId: sale.customerId,
-                saleId: id,
-                amount: -sale.debtAmount,
-                balanceAfter: customer.debt - sale.debtAmount,
-                notes: `Hủy hóa đơn ${sale.code} - hoàn nợ`,
-              },
-            });
-          }
+        // Recalc customer debt từ nguồn
+        if (sale.customerId) {
+          await recalcCustomerDebt(tx, sale.customerId);
         }
       });
 
@@ -456,20 +386,10 @@ export async function DELETE(request: NextRequest) {
     if (!sale) return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
 
     await prisma.$transaction(async (tx) => {
-      // Reverse stock & debt if still active
+      // Reverse stock if still active
       if (sale.status === 'completed') {
         for (const item of sale.items) {
           await reverseStockForProduct(tx, item.productId, item.quantity, id, `Xóa hóa đơn - ${sale.code}`);
-        }
-
-        if (sale.debtAmount > 0 && sale.customerId) {
-          const customer = await tx.customer.findUnique({ where: { id: sale.customerId } });
-          if (customer) {
-            await tx.customer.update({
-              where: { id: sale.customerId },
-              data: { debt: { decrement: sale.debtAmount } },
-            });
-          }
         }
       }
 
@@ -478,6 +398,11 @@ export async function DELETE(request: NextRequest) {
       await tx.stockMovement.deleteMany({ where: { referenceId: id } });
       await tx.saleItem.deleteMany({ where: { saleId: id } });
       await tx.sale.delete({ where: { id } });
+
+      // Recalc debt từ nguồn
+      if (sale.customerId) {
+        await recalcCustomerDebt(tx, sale.customerId);
+      }
     });
 
     return NextResponse.json({ success: true });

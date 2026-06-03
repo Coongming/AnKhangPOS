@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { recalcCustomerDebt, recalcSupplierDebt } from '@/lib/debt-utils';
 
 // GET - List debt transactions
 export async function GET(request: NextRequest) {
@@ -52,11 +53,6 @@ export async function POST(request: NextRequest) {
       if (payAmount > customer.debt) return NextResponse.json({ error: 'Số tiền trả vượt quá công nợ' }, { status: 400 });
 
       await prisma.$transaction(async (tx) => {
-        await tx.customer.update({
-          where: { id: entityId },
-          data: { debt: { decrement: payAmount } },
-        });
-
         await tx.debtTransaction.create({
           data: {
             type: 'customer_payment',
@@ -66,6 +62,8 @@ export async function POST(request: NextRequest) {
             notes: notes || 'Khách trả nợ',
           },
         });
+
+        await recalcCustomerDebt(tx, entityId);
       });
     } else if (type === 'supplier_payment') {
       // Pay supplier
@@ -74,11 +72,6 @@ export async function POST(request: NextRequest) {
       if (payAmount > supplier.debt) return NextResponse.json({ error: 'Số tiền trả vượt quá công nợ' }, { status: 400 });
 
       await prisma.$transaction(async (tx) => {
-        await tx.supplier.update({
-          where: { id: entityId },
-          data: { debt: { decrement: payAmount } },
-        });
-
         await tx.debtTransaction.create({
           data: {
             type: 'supplier_payment',
@@ -88,6 +81,8 @@ export async function POST(request: NextRequest) {
             notes: notes || 'Trả nợ nhà cung cấp',
           },
         });
+
+        await recalcSupplierDebt(tx, entityId);
       });
     } else {
       return NextResponse.json({ error: 'Loại thanh toán không hợp lệ' }, { status: 400 });
