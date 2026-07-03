@@ -1,14 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { AUTH_COOKIE_NAME, verifyAuthToken } from '@/lib/auth';
 
-export function middleware(req: NextRequest) {
-  const token = req.cookies.get('auth_token')?.value;
+export async function middleware(req: NextRequest) {
+  const token = req.cookies.get(AUTH_COOKIE_NAME)?.value;
+  const hasValidSession = await verifyAuthToken(token);
   const isLoginPage = req.nextUrl.pathname === '/login';
+  const isLoginApi = req.nextUrl.pathname === '/api/auth/login';
+  const isApiRoute = req.nextUrl.pathname.startsWith('/api/');
 
-  if (!token && !isLoginPage) {
-    return NextResponse.redirect(new URL('/login', req.url));
+  if (isLoginApi) {
+    return NextResponse.next();
   }
 
-  if (token && isLoginPage) {
+  if (!hasValidSession && isApiRoute) {
+    return NextResponse.json({ error: 'Chưa đăng nhập' }, { status: 401 });
+  }
+
+  if (!hasValidSession && !isLoginPage) {
+    const response = NextResponse.redirect(new URL('/login', req.url));
+    response.cookies.set(AUTH_COOKIE_NAME, '', { maxAge: 0, path: '/' });
+    return response;
+  }
+
+  if (hasValidSession && isLoginPage) {
     return NextResponse.redirect(new URL('/', req.url));
   }
 
@@ -16,5 +30,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 };

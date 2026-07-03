@@ -3,8 +3,10 @@ import { prisma } from '@/lib/prisma';
 import { generateCode } from '@/lib/utils';
 import { recalcSupplierDebt } from '@/lib/debt-utils';
 
+type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
 // Tính giá vốn bình quân đơn giản: Tổng giá trị nhập / Tổng SL nhập
-async function calculateSimpleAvgCost(tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0], productId: string): Promise<number> {
+async function calculateSimpleAvgCost(tx: TxClient, productId: string): Promise<number> {
   const allItems = await tx.purchaseItem.findMany({
     where: {
       productId,
@@ -14,6 +16,37 @@ async function calculateSimpleAvgCost(tx: Parameters<Parameters<typeof prisma.$t
   const totalQty = allItems.reduce((sum, item) => sum + item.quantity, 0);
   const totalValue = allItems.reduce((sum, item) => sum + item.totalPrice, 0);
   return totalQty > 0 ? totalValue / totalQty : 0;
+}
+
+async function ensureEnoughStockToReversePurchase(
+  tx: TxClient,
+  items: Array<{ productId: string; quantity: number }>,
+  actionLabel: string
+): Promise<void> {
+  const quantityByProduct = new Map<string, number>();
+  for (const item of items) {
+    quantityByProduct.set(
+      item.productId,
+      (quantityByProduct.get(item.productId) || 0) + item.quantity
+    );
+  }
+
+  const products = await tx.product.findMany({
+    where: { id: { in: Array.from(quantityByProduct.keys()) } },
+    select: { id: true, name: true, stock: true, unit: true },
+  });
+  const productById = new Map(products.map((product) => [product.id, product]));
+
+  for (const [productId, quantity] of Array.from(quantityByProduct.entries())) {
+    const product = productById.get(productId);
+    if (!product) throw new Error('Sản phẩm trong phiếu nhập không tồn tại');
+
+    if (product.stock < quantity) {
+      throw new Error(
+        `Không thể ${actionLabel}: "${product.name}" chỉ còn ${product.stock} ${product.unit}, cần trừ ${quantity} ${product.unit}`
+      );
+    }
+  }
 }
 
 // GET - List purchases
@@ -161,6 +194,8 @@ export async function PUT(request: NextRequest) {
 
       // Full edit with items → reverse old + apply new
       await prisma.$transaction(async (tx) => {
+        const affectedProductIds = new Set<string>(purchase.items.map((item) => item.productId));
+
         // 1. REVERSE old stock
         for (const oldItem of purchase.items) {
           await tx.product.update({
@@ -200,6 +235,7 @@ export async function PUT(request: NextRequest) {
         for (const item of items) {
           const qty = parseFloat(item.quantity);
           const price = parseFloat(item.unitPrice);
+          affectedProductIds.add(item.productId);
 
           await tx.purchaseItem.create({
             data: {
@@ -238,6 +274,14 @@ export async function PUT(request: NextRequest) {
           });
         }
 
+        for (const productId of Array.from(affectedProductIds)) {
+          const costPrice = await calculateSimpleAvgCost(tx, productId);
+          await tx.product.update({
+            where: { id: productId },
+            data: { costPrice },
+          });
+        }
+
         // 7. Recalc supplier debt từ nguồn
         if (purchase.supplierId !== newSupplierId) {
           await recalcSupplierDebt(tx, purchase.supplierId);
@@ -259,6 +303,8 @@ export async function PUT(request: NextRequest) {
       if (purchase.status === 'cancelled') return NextResponse.json({ error: 'Phiếu đã bị hủy' }, { status: 400 });
 
       await prisma.$transaction(async (tx) => {
+        await ensureEnoughStockToReversePurchase(tx, purchase.items, `hủy phiếu nhập ${purchase.code}`);
+
         await tx.purchase.update({ where: { id }, data: { status: 'cancelled' } });
 
         for (const item of purchase.items) {
@@ -280,6 +326,12 @@ export async function PUT(request: NextRequest) {
               notes: `Hủy phiếu nhập - ${purchase.code}`,
             },
           });
+
+          const costPrice = await calculateSimpleAvgCost(tx, item.productId);
+          await tx.product.update({
+            where: { id: item.productId },
+            data: { costPrice },
+          });
         }
 
         // Recalc supplier debt từ nguồn
@@ -292,7 +344,8 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'Hành động không hợp lệ' }, { status: 400 });
   } catch (error) {
     console.error('Purchases PUT error:', error);
-    return NextResponse.json({ error: 'Lỗi cập nhật phiếu nhập' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Lỗi cập nhật phiếu nhập';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
@@ -312,6 +365,8 @@ export async function DELETE(request: NextRequest) {
 
     await prisma.$transaction(async (tx) => {
       if (purchase.status === 'completed') {
+        await ensureEnoughStockToReversePurchase(tx, purchase.items, `xóa phiếu nhập ${purchase.code}`);
+
         for (const item of purchase.items) {
           const product = await tx.product.findUnique({ where: { id: item.productId } });
           if (!product) continue;
@@ -340,6 +395,14 @@ export async function DELETE(request: NextRequest) {
       await tx.purchaseItem.deleteMany({ where: { purchaseId: id } });
       await tx.purchase.delete({ where: { id } });
 
+      for (const item of purchase.items) {
+        const costPrice = await calculateSimpleAvgCost(tx, item.productId);
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { costPrice },
+        });
+      }
+
       // Recalc supplier debt
       await recalcSupplierDebt(tx, purchase.supplierId);
     });
@@ -347,6 +410,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Purchases DELETE error:', error);
-    return NextResponse.json({ error: 'Lỗi xóa phiếu nhập' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Lỗi xóa phiếu nhập';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

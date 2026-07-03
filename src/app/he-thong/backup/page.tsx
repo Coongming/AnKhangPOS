@@ -17,7 +17,7 @@ export default function BackupPage() {
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'backup.sql';
+      const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'backup.json';
       a.href = url;
       a.download = filename;
       a.click();
@@ -47,7 +47,7 @@ export default function BackupPage() {
           </div>
           <div style={{ padding: '16px 0' }}>
             <p style={{ color: 'var(--text-secondary)', lineHeight: 1.8, fontSize: 13, marginBottom: 16 }}>
-              Tải toàn bộ dữ liệu (khách hàng, sản phẩm, hóa đơn, công nợ...) thành file <code style={{ background: 'var(--bg-secondary)', padding: '2px 6px', borderRadius: 4 }}>.sql</code>. Lưu file này ở nơi an toàn (USB, Google Drive, v.v.)
+              Tải toàn bộ dữ liệu (khách hàng, sản phẩm, hóa đơn, công nợ...) thành file <code style={{ background: 'var(--bg-secondary)', padding: '2px 6px', borderRadius: 4 }}>.json</code>. Đây là định dạng đa nền tảng, có thể chạy trên Windows, Mac hay Linux mà không cần cài đặt thêm phần mềm phụ trợ.
             </p>
 
             <button
@@ -61,7 +61,7 @@ export default function BackupPage() {
             </button>
 
             <div style={{ background: 'var(--warning-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--warning)' }}>
-              ⚠️ <strong>Lưu ý:</strong> Database đang chạy local trên máy này. Nếu máy hỏng mà chưa backup → <strong>mất hết dữ liệu</strong>. Nên backup ít nhất 1 lần/ngày.
+              ⚠️ <strong>Lưu ý:</strong> Database đang chạy local. Nếu ổ cứng hỏng mà chưa backup → <strong>mất hết dữ liệu</strong>. Nên tải file này và ném lên Google Drive ít nhất 1 lần/ngày.
             </div>
           </div>
         </div>
@@ -75,17 +75,62 @@ export default function BackupPage() {
             </h3>
           </div>
           <div style={{ padding: '16px 0' }}>
-            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.8, fontSize: 13, marginBottom: 12 }}>
-              Khi cần khôi phục (máy mới, cài lại...), chạy lệnh sau từ Terminal:
+            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.8, fontSize: 13, marginBottom: 16 }}>
+              Chọn file <code style={{ background: 'var(--bg-secondary)', padding: '2px 6px', borderRadius: 4 }}>.json</code> mà bạn đã tải về trước đó để khôi phục toàn bộ dữ liệu.
             </p>
-            <div style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', padding: 16 }}>
-              <code style={{ fontSize: 12, color: 'var(--accent)', whiteSpace: 'pre-wrap', display: 'block', lineHeight: 2 }}>
-                {`# Khôi phục từ file backup\npsql -U ankhang -d ankhangpos < backup-file.sql`}
-              </code>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <input
+                type="file"
+                id="restore-file"
+                accept=".json"
+                style={{ display: 'none' }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+
+                  if (!confirm('CẢNH BÁO: Quá trình này sẽ XÓA SẠCH dữ liệu hiện tại và thay thế bằng dữ liệu từ file backup. Bạn có chắc chắn muốn tiếp tục?')) {
+                    e.target.value = '';
+                    return;
+                  }
+
+                  try {
+                    showToast('success', 'Đang đọc file và khôi phục dữ liệu...');
+                    const text = await file.text();
+                    const data = JSON.parse(text);
+
+                    const res = await fetch('/api/backup/restore', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(data)
+                    });
+
+                    if (!res.ok) {
+                      const errorData = await res.json();
+                      throw new Error(errorData.error || 'Lỗi khôi phục');
+                    }
+
+                    showToast('success', 'Khôi phục thành công! Trang sẽ tự động tải lại...');
+                    setTimeout(() => window.location.reload(), 2000);
+                  } catch (err: any) {
+                    showToast('error', err.message || 'File backup không hợp lệ hoặc lỗi server');
+                    e.target.value = '';
+                  }
+                }}
+              />
+
+              <button
+                className="btn btn-outline btn-lg w-full"
+                onClick={() => document.getElementById('restore-file')?.click()}
+                style={{ justifyContent: 'center', height: 48, borderColor: 'var(--accent)', color: 'var(--accent)' }}
+              >
+                <Database size={18} style={{ marginRight: 8 }} />
+                Nạp file Backup (.json)
+              </button>
             </div>
 
-            <div style={{ background: 'var(--info-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--info)' }}>
-              💡 <strong>Mẹo:</strong> Lưu file backup lên Google Drive hoặc USB sau mỗi ngày làm việc để an toàn nhất.
+            <div style={{ background: 'var(--danger-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--danger)' }}>
+              🚨 <strong>Rất quan trọng:</strong> Hành động này không thể hoàn tác. Dữ liệu hiện tại sẽ bị ghi đè hoàn toàn.
             </div>
           </div>
         </div>

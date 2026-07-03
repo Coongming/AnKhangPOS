@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Receipt, Eye, XCircle, Trash2, Edit3, Search, Plus, Copy, FileText } from 'lucide-react';
+import { Receipt, Eye, Trash2, Edit3, Search, Plus, Copy, FileText } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency, formatDate, formatDateTime, formatOrderForCopy } from '@/lib/utils';
 import InvoiceModal from '@/components/InvoiceModal';
@@ -19,6 +19,16 @@ interface Sale {
   items: Array<{ productId: string; quantity: number; unitPrice: number; discount: number; totalPrice: number; product: { name: string; unit: string } }>;
 }
 interface EditItem { productId: string; name: string; unit: string; quantity: string; unitPrice: string; discount: string; }
+
+const saleStatusMeta: Record<string, { label: string; badgeClass: string }> = {
+  completed: { label: 'Hoàn thành', badgeClass: 'badge-success' },
+  pending: { label: 'Đơn chờ', badgeClass: 'badge-warning' },
+  cancelled: { label: 'Đã hủy', badgeClass: 'badge-danger' },
+};
+
+function getSaleStatusMeta(status: string) {
+  return saleStatusMeta[status] || { label: status, badgeClass: 'badge-info' };
+}
 
 export default function SalesHistoryPage() {
   const { showToast } = useToast();
@@ -48,27 +58,39 @@ export default function SalesHistoryPage() {
   const [invoiceData, setInvoiceData] = useState<any>(null);
   const [showInvoice, setShowInvoice] = useState(false);
 
-  const fetchData = useCallback(async () => {
+  const fetchInitialData = useCallback(async () => {
     try {
-      const [salesRes, prodRes, custRes] = await Promise.all([
-        fetch(`/api/sales?${new URLSearchParams({
-          ...(dateFrom && { dateFrom }),
-          ...(dateTo && { dateTo }),
-          ...(statusFilter && { status: statusFilter }),
-          ...(paymentMethodFilter && { paymentMethod: paymentMethodFilter }),
-        })}`),
+      const [prodRes, custRes] = await Promise.all([
         fetch('/api/products?status=active'),
         fetch('/api/customers'),
       ]);
-      setSales(await salesRes.json());
       setProducts(await prodRes.json());
       const custData = await custRes.json();
       setCustomers(Array.isArray(custData) ? custData : []);
-    } catch { showToast('error', 'Lỗi tải dữ liệu'); }
+    } catch {
+      showToast('error', 'Lỗi tải danh mục tĩnh');
+    }
+  }, [showToast]);
+
+  const fetchSales = useCallback(async () => {
+    setLoading(true);
+    try {
+      const salesRes = await fetch(`/api/sales?${new URLSearchParams({
+        ...(dateFrom && { dateFrom }),
+        ...(dateTo && { dateTo }),
+        ...(statusFilter && { status: statusFilter }),
+        ...(paymentMethodFilter && { paymentMethod: paymentMethodFilter }),
+      })}`);
+      setSales(await salesRes.json());
+    } catch { showToast('error', 'Lỗi tải danh sách hóa đơn'); }
     finally { setLoading(false); }
   }, [dateFrom, dateTo, statusFilter, paymentMethodFilter, showToast]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { fetchInitialData(); }, [fetchInitialData]);
+  useEffect(() => { fetchSales(); }, [fetchSales]);
+
+  // Update fetchData reference used by delete handlers to just fetchSales
+  const fetchData = fetchSales;
 
   const handleCopyOrder = async (sale: Sale) => {
     const text = formatOrderForCopy({
@@ -87,18 +109,6 @@ export default function SalesHistoryPage() {
       await navigator.clipboard.writeText(text);
       showToast('success', '📋 Đã copy đơn hàng!');
     } catch { showToast('error', 'Lỗi copy'); }
-  };
-
-  const handleCancel = async (sale: Sale) => {
-    if (!confirm(`Hủy hóa đơn ${sale.code}? Tồn kho và công nợ sẽ được hoàn nguyên.`)) return;
-    try {
-      const res = await fetch('/api/sales', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: sale.id, action: 'cancel' }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error);
-      showToast('success', 'Đã hủy hóa đơn'); fetchData();
-    } catch (err) { showToast('error', err instanceof Error ? err.message : 'Lỗi'); }
   };
 
   const handleDelete = async (sale: Sale) => {
@@ -274,7 +284,7 @@ export default function SalesHistoryPage() {
           <span className="text-muted">đến</span>
           <input className="form-input" type="date" style={{ width: 150 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
           <select className="form-select" style={{ width: 140 }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option value="">Tất cả</option><option value="completed">Hoàn thành</option><option value="cancelled">Đã hủy</option>
+            <option value="">Tất cả</option><option value="completed">Hoàn thành</option><option value="pending">Đơn chờ</option><option value="cancelled">Đã hủy</option>
           </select>
           <select className="form-select" style={{ width: 160 }} value={paymentMethodFilter} onChange={e => setPaymentMethodFilter(e.target.value)}>
             <option value="">Tất cả PT thanh toán</option><option value="cash">Tiền mặt</option><option value="transfer">Chuyển khoản</option>
@@ -289,28 +299,36 @@ export default function SalesHistoryPage() {
           <table className="table">
             <thead><tr><th>Mã</th><th>Ngày</th><th>Khách hàng</th><th>Thanh toán</th><th>Sản phẩm</th><th className="text-right">Tổng tiền</th><th className="text-right">Còn nợ</th><th>Trạng thái</th><th className="text-center">Thao tác</th></tr></thead>
             <tbody>
-              {sales.map(s => (
-                <tr key={s.id} style={{ opacity: s.status === 'cancelled' ? 0.5 : 1 }}>
-                  <td style={{ fontWeight: 600, color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setViewSale(s)}>{s.code}</td>
-                  <td>{formatDate(s.saleDate)}</td>
-                  <td>{s.customer?.name || 'Khách lẻ'}</td>
-                  <td><span className={`badge ${s.paymentMethod === 'cash' ? 'badge-info' : 'badge-accent'}`}>{s.paymentMethod === 'cash' ? '💵 Tiền mặt' : '🏦 Chuyển khoản'}</span></td>
-                  <td style={{ fontSize: 12, maxWidth: 260, whiteSpace: 'normal', lineHeight: 1.4 }}>{s.items.map(it => `${it.product.name} x${it.quantity}`).join(', ')}</td>
-                  <td className="text-right font-bold">{formatCurrency(s.totalAmount)}</td>
-                  <td className="text-right" style={{ color: s.debtAmount > 0 ? 'var(--warning)' : 'var(--text-muted)', fontWeight: s.debtAmount > 0 ? 700 : 400 }}>{formatCurrency(s.debtAmount)}</td>
-                  <td><span className={`badge ${s.status === 'completed' ? 'badge-success' : 'badge-danger'}`}>{s.status === 'completed' ? 'Hoàn thành' : 'Đã hủy'}</span></td>
-                  <td className="text-center">
-                    <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setViewSale(s)} title="Xem"><Eye size={14} /></button>
-                      {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openInvoice(s)} title="Xuất HĐ" style={{ color: 'var(--accent)' }}><FileText size={14} /></button>}
-                      <button className="btn btn-ghost btn-sm" onClick={() => handleCopyOrder(s)} title="Copy đơn"><Copy size={14} /></button>
-                      {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="Sửa"><Edit3 size={14} /></button>}
-                      {s.status === 'completed' && <button className="btn btn-ghost btn-sm text-danger" onClick={() => handleCancel(s)} title="Hủy"><XCircle size={14} /></button>}
-                      <button className="btn btn-ghost btn-sm text-danger" onClick={() => handleDelete(s)} title="Xóa"><Trash2 size={14} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {sales.map(s => {
+                const statusMeta = getSaleStatusMeta(s.status);
+                return (
+                  <tr key={s.id} style={{ opacity: s.status === 'cancelled' ? 0.5 : 1 }}>
+                    <td style={{ fontWeight: 600, color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setViewSale(s)}>{s.code}</td>
+                    <td>{formatDate(s.saleDate)}</td>
+                    <td>{s.customer?.name || 'Khách lẻ'}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {s.status === 'pending' ? (
+                        <span className="badge badge-warning">Chưa thu</span>
+                      ) : (
+                        <span className={`badge ${s.paymentMethod === 'cash' ? 'badge-info' : 'badge-accent'}`}>{s.paymentMethod === 'cash' ? '💵 Tiền mặt' : '🏦 Chuyển khoản'}</span>
+                      )}
+                    </td>
+                    <td style={{ fontSize: 12, maxWidth: 260, whiteSpace: 'normal', lineHeight: 1.4 }}>{s.items.map(it => `${it.product.name} x${it.quantity}`).join(', ')}</td>
+                    <td className="text-right font-bold">{formatCurrency(s.totalAmount)}</td>
+                    <td className="text-right" style={{ color: s.debtAmount > 0 ? 'var(--warning)' : 'var(--text-muted)', fontWeight: s.debtAmount > 0 ? 700 : 400 }}>{formatCurrency(s.debtAmount)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}><span className={`badge ${statusMeta.badgeClass}`}>{statusMeta.label}</span></td>
+                    <td className="text-center">
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setViewSale(s)} title="Xem"><Eye size={14} /></button>
+                        {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openInvoice(s)} title="Xuất HĐ" style={{ color: 'var(--accent)' }}><FileText size={14} /></button>}
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleCopyOrder(s)} title="Copy đơn"><Copy size={14} /></button>
+                        {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="Sửa"><Edit3 size={14} /></button>}
+                        <button className="btn btn-ghost btn-sm text-danger" onClick={() => handleDelete(s)} title="Xóa"><Trash2 size={14} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

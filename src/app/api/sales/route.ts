@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PUT - Full edit sale OR Cancel sale
+// PUT - Full edit sale OR Complete/delete pending sale
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
@@ -334,30 +334,24 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    // --- Cancel sale ---
-    if (action === 'cancel') {
+    // --- Delete pending sale ---
+    if (action === 'deletePending') {
       const sale = await prisma.sale.findUnique({
         where: { id },
         include: { items: true },
       });
 
       if (!sale) return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
-      if (sale.status === 'cancelled') return NextResponse.json({ error: 'Hóa đơn đã bị hủy' }, { status: 400 });
+      if (sale.status !== 'pending') {
+        return NextResponse.json(
+          { error: 'Chức năng hủy hóa đơn đã được bỏ. Hãy dùng nút Xóa hóa đơn nếu cần tạo lại đơn.' },
+          { status: 400 }
+        );
+      }
 
       await prisma.$transaction(async (tx) => {
-        await tx.sale.update({ where: { id }, data: { status: 'cancelled' } });
-
-        // Reverse stock (only if was completed)
-        if (sale.status === 'completed') {
-          for (const item of sale.items) {
-            await reverseStockForProduct(tx, item.productId, item.quantity, id, `Hủy hóa đơn - ${sale.code}`);
-          }
-        }
-
-        // Recalc customer debt từ nguồn
-        if (sale.customerId) {
-          await recalcCustomerDebt(tx, sale.customerId);
-        }
+        await tx.saleItem.deleteMany({ where: { saleId: id } });
+        await tx.sale.delete({ where: { id } });
       });
 
       return NextResponse.json({ success: true });
@@ -371,7 +365,7 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-// DELETE - Delete sale (cancel + hard delete)
+// DELETE - Delete sale (reverse stock when needed + hard delete)
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { randomBytes } from 'crypto';
-
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'ankhang123';
+import {
+  AUTH_COOKIE_NAME,
+  createAuthToken,
+  getAdminCredentials,
+  getAuthCookieOptions,
+} from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,33 +13,32 @@ export async function POST(req: NextRequest) {
     // Logout
     if (action === 'logout') {
       const response = NextResponse.json({ success: true });
-      response.cookies.set('auth_token', '', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+      response.cookies.set(AUTH_COOKIE_NAME, '', {
+        ...getAuthCookieOptions(),
         maxAge: 0,
-        path: '/',
       });
       return response;
     }
 
+    const adminCredentials = getAdminCredentials();
+    if (!adminCredentials) {
+      return NextResponse.json(
+        { error: 'Chưa cấu hình tài khoản đăng nhập' },
+        { status: 500 }
+      );
+    }
+
     // Login
-    if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+    if (username !== adminCredentials.username || password !== adminCredentials.password) {
       return NextResponse.json(
         { error: 'Tên đăng nhập hoặc mật khẩu không đúng' },
         { status: 401 }
       );
     }
 
-    const token = randomBytes(32).toString('hex');
+    const token = await createAuthToken(username);
     const response = NextResponse.json({ success: true });
-    response.cookies.set('auth_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/',
-    });
+    response.cookies.set(AUTH_COOKIE_NAME, token, getAuthCookieOptions());
 
     return response;
   } catch {

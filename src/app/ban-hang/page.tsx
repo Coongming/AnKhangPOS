@@ -1,7 +1,30 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Search, Trash2, ShoppingCart, User, Plus, Minus, Banknote, CreditCard, Truck, Copy, ClipboardList } from 'lucide-react';
+import {
+  ArrowLeft,
+  AlertCircle,
+  Banknote,
+  CalendarDays,
+  CheckCircle2,
+  ChevronRight,
+  ClipboardList,
+  Copy,
+  CreditCard,
+  Minus,
+  PackageOpen,
+  Phone,
+  Plus,
+  ReceiptText,
+  Search,
+  ShoppingCart,
+  StickyNote,
+  Trash2,
+  Truck,
+  User,
+  UserPlus,
+  X,
+} from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency, formatOrderForCopy } from '@/lib/utils';
 import InvoiceModal from '@/components/InvoiceModal';
@@ -42,6 +65,10 @@ export default function SalesPage() {
   const [searchProduct, setSearchProduct] = useState('');
   const [searchCustomer, setSearchCustomer] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [showQuickCustomerForm, setShowQuickCustomerForm] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [addingCustomer, setAddingCustomer] = useState(false);
   const [orderDiscount, setOrderDiscount] = useState('0');
   const [paidAmount, setPaidAmount] = useState('');
   const [notes, setNotes] = useState('');
@@ -53,13 +80,14 @@ export default function SalesPage() {
   const [invoiceData, setInvoiceData] = useState<any>(null);
   const [showInvoice, setShowInvoice] = useState(false);
   const [showOrderHistory, setShowOrderHistory] = useState(false);
-const [searchHistory, setSearchHistory] = useState('');
-const [saleHistory, setSaleHistory] = useState<SaleHistory[]>([]);
-const [loadingHistory, setLoadingHistory] = useState(false);
-const [showPending, setShowPending] = useState(false);
-const [pendingSales, setPendingSales] = useState<PendingSale[]>([]);
-const [selectedPending, setSelectedPending] = useState<PendingSale | null>(null);
-const [completingPending, setCompletingPending] = useState(false);
+  const [searchHistory, setSearchHistory] = useState('');
+  const [saleHistory, setSaleHistory] = useState<SaleHistory[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showPending, setShowPending] = useState(false);
+  const [pendingSales, setPendingSales] = useState<PendingSale[]>([]);
+  const [selectedPending, setSelectedPending] = useState<PendingSale | null>(null);
+  const [completingPending, setCompletingPending] = useState(false);
+  const [deletingPending, setDeletingPending] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -116,12 +144,45 @@ const [completingPending, setCompletingPending] = useState(false);
     } finally { setCompletingPending(false); }
   };
 
+  const deletePendingSale = async () => {
+    if (!selectedPending) return;
+    if (!confirm(`Xóa đơn chờ ${selectedPending.code}?`)) return;
+
+    setDeletingPending(true);
+    try {
+      const res = await fetch('/api/sales', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selectedPending.id, action: 'deletePending' }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+
+      showToast('success', `Đã xóa đơn ${selectedPending.code}`);
+      setSelectedPending(null);
+      setPaidAmount('');
+      setDeliveryEmployeeId('');
+      setPaymentMethod('cash');
+      fetchPendingSales();
+      fetchData();
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Lỗi xóa đơn');
+    } finally {
+      setDeletingPending(false);
+    }
+  };
+
   const filteredProducts = products.filter((p) =>
     searchProduct && (p.name.toLowerCase().includes(searchProduct.toLowerCase()) || p.code.toLowerCase().includes(searchProduct.toLowerCase()))
   );
 
+  const trimmedCustomerSearch = searchCustomer.trim();
+  const customerSearchQuery = trimmedCustomerSearch.toLowerCase();
   const filteredCustomers = customers.filter((c) =>
-    searchCustomer && (c.name.toLowerCase().includes(searchCustomer.toLowerCase()) || (c.phone && c.phone.includes(searchCustomer)))
+    customerSearchQuery && (
+      c.name.toLowerCase().includes(customerSearchQuery)
+      || (c.phone && c.phone.includes(trimmedCustomerSearch))
+      || c.code.toLowerCase().includes(customerSearchQuery)
+    )
   );
 
   const addToCart = (product: Product) => {
@@ -152,6 +213,10 @@ const [completingPending, setCompletingPending] = useState(false);
 
   const handleSubmit = async (status?: 'pending') => {
     if (cart.length === 0) { showToast('error', 'Vui lòng thêm sản phẩm'); return; }
+    if (!selectedCustomer && searchCustomer.trim()) {
+      showToast('error', 'Chọn hoặc thêm khách hàng, hoặc xóa ô khách để bán khách lẻ');
+      return;
+    }
     if (!status && debtAmount > 0 && !selectedCustomer) { showToast('error', 'Bán nợ phải chọn khách hàng'); return; }
 
     setSubmitting(true);
@@ -240,6 +305,49 @@ if (status !== 'pending') {
   };
 
   const payFull = () => setPaidAmount(String(totalAmount));
+  const isLikelyPhone = (value: string) => /^[0-9+\-\s().]{6,}$/.test(value.trim());
+
+  const openQuickCustomerForm = () => {
+    const query = searchCustomer.trim();
+    setNewCustomerName(isLikelyPhone(query) ? '' : query);
+    setNewCustomerPhone(isLikelyPhone(query) ? query : '');
+    setShowQuickCustomerForm(true);
+  };
+
+  const createQuickCustomer = async () => {
+    if (!newCustomerName.trim()) {
+      showToast('error', 'Nhập tên khách hàng');
+      return;
+    }
+
+    setAddingCustomer(true);
+    try {
+      const res = await fetch('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newCustomerName.trim(),
+          phone: newCustomerPhone.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Lỗi thêm khách hàng');
+
+      setSelectedCustomer(data);
+      setCustomers((prev) => [data, ...prev]);
+      setSearchCustomer('');
+      setShowCustomerSearch(false);
+      setShowQuickCustomerForm(false);
+      setNewCustomerName('');
+      setNewCustomerPhone('');
+      showToast('success', `Đã thêm khách hàng ${data.name}`);
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Lỗi thêm khách hàng');
+    } finally {
+      setAddingCustomer(false);
+    }
+  };
+
   const searchSaleHistory = async (query: string) => {
     if (!query.trim()) { setSaleHistory([]); return; }
     setLoadingHistory(true);
@@ -274,6 +382,23 @@ if (status !== 'pending') {
     showToast('success', `Đã copy đơn ${sale.code}`);
   };
 
+  const formatPreviewItems = (items: Array<{ product: { name: string; unit: string }; quantity: number }>) => {
+    const preview = items.slice(0, 3).map((item) => `${item.product.name} x${item.quantity}`);
+    const hiddenCount = items.length - preview.length;
+    return `${preview.join(', ')}${hiddenCount > 0 ? ` +${hiddenCount}` : ''}`;
+  };
+
+  const closePendingModal = () => {
+    setShowPending(false);
+    setSelectedPending(null);
+  };
+
+  const selectedPendingPaid = parseFloat(paidAmount) || 0;
+  const selectedPendingDebt = selectedPending
+    ? Math.max(0, selectedPending.totalAmount - selectedPendingPaid)
+    : 0;
+  const showCustomerNotFound = showCustomerSearch && !!trimmedCustomerSearch && filteredCustomers.length === 0;
+
   return (
     <>
       {showInvoice && invoiceData && (
@@ -283,130 +408,260 @@ if (status !== 'pending') {
         />
       )}
       {showPending && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div style={{ background: 'var(--bg-card)', borderRadius: 16, width: '100%', maxWidth: 600, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 700, fontSize: 15 }}>📋 Đơn chờ giao hàng ({pendingSales.length})</span>
-              <button onClick={() => { setShowPending(false); setSelectedPending(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text-muted)' }}>✕</button>
-            </div>
-            <div style={{ padding: 16 }}>
-              {pendingSales.length === 0 ? (
-                <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>Không có đơn chờ nào</div>
-              ) : !selectedPending ? (
-                pendingSales.map((sale) => (
-                  <div key={sale.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 8, cursor: 'pointer' }} onClick={() => setSelectedPending(sale)} className="nav-item">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{sale.code}</span>
-                      <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(sale.saleDate).toLocaleDateString('vi-VN')}</span>
-                    </div>
-                    <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 4 }}>👤 {sale.customer?.name || 'Khách lẻ'} {sale.customer?.phone ? `• ${sale.customer.phone}` : ''}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>{sale.items.map(i => `${i.product.name} x${i.quantity}`).join(', ')}</div>
-                    <div style={{ fontWeight: 600, color: 'var(--accent)' }}>{formatCurrency(sale.totalAmount)}</div>
-                    {sale.notes && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>📝 {sale.notes}</div>}
-                  </div>
-                ))
-              ) : (
+        <div className="modal-overlay" onClick={closePendingModal}>
+          <div className="modal order-modal" onClick={e => e.stopPropagation()}>
+            <div className="order-modal-header">
+              <div className="order-modal-title">
+                <span className="order-modal-icon"><ClipboardList /></span>
                 <div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setSelectedPending(null)} style={{ marginBottom: 12 }}>← Quay lại</button>
-                  <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: 12, marginBottom: 12 }}>
-                    <div style={{ fontWeight: 700, color: 'var(--accent)', marginBottom: 4 }}>{selectedPending.code}</div>
-                    <div style={{ fontSize: 13, marginBottom: 4 }}>👤 {selectedPending.customer?.name || 'Khách lẻ'}</div>
-                    {selectedPending.items.map((item, i) => (
-                      <div key={i} style={{ fontSize: 13, display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{item.product.name} x{item.quantity}</span>
-                        <span>{formatCurrency(item.totalPrice)}</span>
+                  <h3>Đơn chờ giao hàng</h3>
+                  <p>{pendingSales.length} đơn đang chờ xử lý</p>
+                </div>
+              </div>
+              <button className="modal-close" onClick={closePendingModal} title="Đóng">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body order-modal-body">
+              {pendingSales.length === 0 ? (
+                <div className="empty-state order-empty-state">
+                  <PackageOpen />
+                  <h3>Chưa có đơn chờ</h3>
+                  <p>Các đơn lưu chờ sẽ nằm ở đây.</p>
+                </div>
+              ) : !selectedPending ? (
+                <div className="order-list">
+                  {pendingSales.map((sale) => (
+                    <button
+                      key={sale.id}
+                      type="button"
+                      className="order-card"
+                      onClick={() => setSelectedPending(sale)}
+                    >
+                      <div className="order-card-top">
+                        <div>
+                          <div className="order-code-row">
+                            <span className="order-code">{sale.code}</span>
+                            <span className="badge badge-warning">Đang chờ</span>
+                          </div>
+                          <div className="order-customer">
+                            <User size={14} />
+                            <span>{sale.customer?.name || 'Khách lẻ'}</span>
+                            {sale.customer?.phone && (
+                              <>
+                                <span className="order-dot">•</span>
+                                <Phone size={13} />
+                                <span>{sale.customer.phone}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <ChevronRight className="order-card-arrow" />
                       </div>
-                    ))}
-                    <div style={{ fontWeight: 700, fontSize: 15, borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8, display: 'flex', justifyContent: 'space-between' }}>
-                      <span>Tổng:</span>
-                      <span style={{ color: 'var(--accent)' }}>{formatCurrency(selectedPending.totalAmount)}</span>
+                      <div className="order-item-preview">
+                        {formatPreviewItems(sale.items)}
+                      </div>
+                      {sale.notes && (
+                        <div className="order-note">
+                          <StickyNote size={14} />
+                          <span>{sale.notes}</span>
+                        </div>
+                      )}
+                      <div className="order-card-footer">
+                        <span><CalendarDays size={14} />{new Date(sale.saleDate).toLocaleDateString('vi-VN')}</span>
+                        <strong>{formatCurrency(sale.totalAmount)}</strong>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="order-detail">
+                  <button className="btn btn-ghost btn-sm order-back-btn" onClick={() => setSelectedPending(null)} type="button">
+                    <ArrowLeft size={15} /> Danh sách đơn chờ
+                  </button>
+                  <div className="order-detail-head">
+                    <div>
+                      <div className="order-code-row">
+                        <span className="order-code">{selectedPending.code}</span>
+                        <span className="badge badge-warning">Đang chờ</span>
+                      </div>
+                      <div className="order-customer order-detail-customer">
+                        <User size={14} />
+                        <span>{selectedPending.customer?.name || 'Khách lẻ'}</span>
+                        {selectedPending.customer?.phone && (
+                          <>
+                            <span className="order-dot">•</span>
+                            <Phone size={13} />
+                            <span>{selectedPending.customer.phone}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div className="order-detail-total">
+                      <span>Tổng đơn</span>
+                      <strong>{formatCurrency(selectedPending.totalAmount)}</strong>
                     </div>
                   </div>
-                  <div className="form-group" style={{ marginBottom: 12 }}>
-                    <label className="form-label">Nhân viên giao</label>
+
+                  <div className="order-lines">
+                    <div className="order-lines-title">Sản phẩm</div>
+                    <div className="order-line-list">
+                      {selectedPending.items.map((item, i) => (
+                        <div key={i} className="order-line">
+                          <div>
+                            <span>{item.product.name}</span>
+                            <small>{item.quantity} {item.product.unit} x {formatCurrency(item.unitPrice)}</small>
+                          </div>
+                          <strong>{formatCurrency(item.totalPrice)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selectedPending.notes && (
+                    <div className="order-note order-note-detail">
+                      <StickyNote size={14} />
+                      <span>{selectedPending.notes}</span>
+                    </div>
+                  )}
+
+                  <div className="form-group order-form-group">
+                    <label className="form-label">Nhân viên giao hàng</label>
                     <select className="form-select" value={deliveryEmployeeId} onChange={(e) => setDeliveryEmployeeId(e.target.value)}>
-                      <option value="">Không giao hàng</option>
+                      <option value="">Không có</option>
                       {employeesList.map((e) => <option key={e.id} value={e.id}>{e.code} - {e.name}</option>)}
                     </select>
                   </div>
-                  <div className="form-group" style={{ marginBottom: 12 }}>
+
+                  <div className="form-group order-form-group">
                     <label className="form-label">Phương thức thanh toán</label>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button className={`btn ${paymentMethod === 'cash' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setPaymentMethod('cash')} style={{ flex: 1, justifyContent: 'center' }} type="button">💵 Tiền mặt</button>
-                      <button className={`btn ${paymentMethod === 'transfer' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setPaymentMethod('transfer')} style={{ flex: 1, justifyContent: 'center' }} type="button">🏦 Chuyển khoản</button>
+                    <div className="order-payment-switch">
+                      <button className={paymentMethod === 'cash' ? 'active' : ''} onClick={() => setPaymentMethod('cash')} type="button">
+                        <Banknote size={16} /> Tiền mặt
+                      </button>
+                      <button className={paymentMethod === 'transfer' ? 'active' : ''} onClick={() => setPaymentMethod('transfer')} type="button">
+                        <CreditCard size={16} /> Chuyển khoản
+                      </button>
                     </div>
                   </div>
-                  <div className="form-group" style={{ marginBottom: 16 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <label className="form-label" style={{ marginBottom: 0 }}>Tiền khách trả</label>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setPaidAmount(String(selectedPending.totalAmount))} style={{ fontSize: 11 }}>Trả đủ</button>
+
+                  <div className="order-pay-box">
+                    <div className="order-pay-head">
+                      <label className="form-label">Số tiền khách trả</label>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setPaidAmount(String(selectedPending.totalAmount))} type="button">
+                        <CheckCircle2 size={14} /> Trả đủ
+                      </button>
                     </div>
-                    <input className="form-input" type="number" min="0" value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} placeholder="0" style={{ fontSize: 16, fontWeight: 600, marginTop: 6 }} />
+                    <input className="form-input order-pay-input" type="number" min="0" value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} placeholder="0" />
+                    <div className={selectedPendingDebt > 0 ? 'order-remaining warning' : 'order-remaining'}>
+                      <span>{selectedPendingDebt > 0 ? 'Còn nợ' : 'Đã thanh toán đủ'}</span>
+                      <strong>{selectedPendingDebt > 0 ? formatCurrency(selectedPendingDebt) : formatCurrency(selectedPending.totalAmount)}</strong>
+                    </div>
                   </div>
-                  <button className="btn btn-success w-full" onClick={completePendingSale} disabled={completingPending} style={{ justifyContent: 'center', height: 44 }}>
-                    {completingPending ? 'Đang xử lý...' : '✅ Hoàn thành đơn'}
-                  </button>
+
+                  <div className="order-action-row">
+                    <button className="btn btn-danger btn-lg" onClick={deletePendingSale} disabled={deletingPending || completingPending} type="button">
+                      <Trash2 size={18} />
+                      {deletingPending ? 'Đang xóa...' : 'Xóa đơn'}
+                    </button>
+                    <button className="btn btn-success btn-lg order-complete-btn" onClick={completePendingSale} disabled={completingPending || deletingPending} type="button">
+                      <CheckCircle2 size={18} />
+                      {completingPending ? 'Đang xử lý...' : 'Hoàn tất đơn'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         </div>
       )}
+
       {showOrderHistory && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 2000,
-          background: 'rgba(0,0,0,0.7)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-        }}>
-          <div style={{
-            background: 'var(--bg-card)', borderRadius: 16,
-            width: '100%', maxWidth: 560, maxHeight: '85vh',
-            overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-          }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 700, fontSize: 15 }}>🔍 Tìm đơn cũ</span>
-              <button onClick={() => setShowOrderHistory(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text-muted)' }}>✕</button>
-            </div>
-            <div style={{ padding: 16 }}>
-              <input
-                className="form-input"
-                placeholder="Nhập tên hoặc SĐT khách hàng..."
-                value={searchHistory}
-                autoFocus
-                onChange={(e) => {
-                  setSearchHistory(e.target.value);
-                  searchSaleHistory(e.target.value);
-                }}
-                style={{ marginBottom: 12 }}
-              />
-              {loadingHistory && <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 20 }}>Đang tìm...</div>}
-              {saleHistory.map((sale) => (
-                <div key={sale.id} style={{
-                  border: '1px solid var(--border)', borderRadius: 8,
-                  padding: 12, marginBottom: 8, cursor: 'pointer',
-                }}
-                  onClick={() => copyOldOrder(sale)}
-                  className="nav-item"
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{sale.code}</span>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                      {new Date(sale.saleDate).toLocaleDateString('vi-VN')}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-                    👤 {sale.customer?.name || 'Khách lẻ'} {sale.customer?.phone ? `• ${sale.customer.phone}` : ''}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    {sale.items.map(i => `${i.product.name} x${i.quantity}`).join(', ')}
-                  </div>
-                  <div style={{ marginTop: 6, fontWeight: 600, color: 'var(--accent)' }}>
-                    {formatCurrency(sale.totalAmount)}
-                  </div>
+        <div className="modal-overlay" onClick={() => setShowOrderHistory(false)}>
+          <div className="modal order-modal" onClick={e => e.stopPropagation()}>
+            <div className="order-modal-header">
+              <div className="order-modal-title">
+                <span className="order-modal-icon"><ReceiptText /></span>
+                <div>
+                  <h3>Copy đơn cũ</h3>
+                  <p>Tìm theo tên hoặc số điện thoại khách hàng</p>
                 </div>
-              ))}
+              </div>
+              <button className="modal-close" onClick={() => setShowOrderHistory(false)} title="Đóng">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body order-modal-body">
+              <div className="search-box order-history-search">
+                <Search size={18} />
+                <input
+                  placeholder="Nhập tên hoặc số điện thoại khách hàng..."
+                  value={searchHistory}
+                  autoFocus
+                  onChange={(e) => {
+                    setSearchHistory(e.target.value);
+                    searchSaleHistory(e.target.value);
+                  }}
+                />
+              </div>
+
+              {loadingHistory && <div className="loading-spinner" style={{ margin: '40px auto' }}></div>}
+
+              {!loadingHistory && saleHistory.length > 0 && (
+                <div className="order-list">
+                  {saleHistory.map((sale) => (
+                    <button
+                      key={sale.id}
+                      type="button"
+                      className="order-card"
+                      onClick={() => copyOldOrder(sale)}
+                    >
+                      <div className="order-card-top">
+                        <div>
+                          <div className="order-code-row">
+                            <span className="order-code">{sale.code}</span>
+                            <span className="badge badge-neutral">{sale.items.length} món</span>
+                          </div>
+                          <div className="order-customer">
+                            <User size={14} />
+                            <span>{sale.customer?.name || 'Khách lẻ'}</span>
+                            {sale.customer?.phone && (
+                              <>
+                                <span className="order-dot">•</span>
+                                <Phone size={13} />
+                                <span>{sale.customer.phone}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <Copy className="order-card-arrow" />
+                      </div>
+                      <div className="order-item-preview">
+                        {formatPreviewItems(sale.items)}
+                      </div>
+                      <div className="order-card-footer">
+                        <span><CalendarDays size={14} />{new Date(sale.saleDate).toLocaleDateString('vi-VN')}</span>
+                        <strong>{formatCurrency(sale.totalAmount)}</strong>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {!loadingHistory && searchHistory && saleHistory.length === 0 && (
-                <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 20 }}>Không tìm thấy đơn hàng nào</div>
+                <div className="empty-state order-empty-state">
+                  <Search />
+                  <h3>Không tìm thấy</h3>
+                  <p>Không có đơn hàng nào khớp với từ khóa</p>
+                </div>
+              )}
+
+              {!loadingHistory && !searchHistory && saleHistory.length === 0 && (
+                <div className="empty-state order-empty-state">
+                  <ReceiptText />
+                  <h3>Sẵn sàng tìm đơn cũ</h3>
+                  <p>Nhập thông tin khách để copy nhanh vào giỏ hàng.</p>
+                </div>
               )}
             </div>
           </div>
@@ -551,10 +806,16 @@ if (status !== 'pending') {
           ) : (
             <div style={{ position: 'relative' }}>
               <input className="form-input" placeholder="Tìm khách (tên/SĐT)..." value={searchCustomer}
-                onChange={(e) => { setSearchCustomer(e.target.value); setShowCustomerSearch(true); }}
+                onChange={(e) => {
+                  setSearchCustomer(e.target.value);
+                  setShowCustomerSearch(true);
+                  setShowQuickCustomerForm(false);
+                }}
                 onFocus={() => setShowCustomerSearch(true)}
               />
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Bỏ trống = khách lẻ</div>
+              {!trimmedCustomerSearch && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Bỏ trống = khách lẻ</div>
+              )}
               {showCustomerSearch && filteredCustomers.length > 0 && (
                 <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', zIndex: 10, maxHeight: 150, overflowY: 'auto', boxShadow: 'var(--shadow-lg)' }}>
                   {filteredCustomers.map((c) => (
@@ -565,6 +826,46 @@ if (status !== 'pending') {
                       <div style={{ fontSize: 11 }}>{c.phone || ''} {c.debt > 0 ? `• Nợ: ${formatCurrency(c.debt)}` : ''}</div>
                     </div>
                   ))}
+                </div>
+              )}
+              {showCustomerNotFound && !showQuickCustomerForm && (
+                <div className="customer-not-found">
+                  <div className="customer-not-found-text">
+                    <AlertCircle size={15} />
+                    <span>Không tìm thấy khách hàng</span>
+                  </div>
+                  <button className="btn btn-primary btn-sm w-full" type="button" onClick={openQuickCustomerForm}>
+                    <UserPlus size={14} /> Thêm khách hàng mới
+                  </button>
+                </div>
+              )}
+              {showCustomerNotFound && showQuickCustomerForm && (
+                <div className="quick-customer-form">
+                  <div className="quick-customer-title">
+                    <UserPlus size={15} />
+                    <span>Thêm khách hàng mới</span>
+                  </div>
+                  <input
+                    className="form-input"
+                    placeholder="Tên khách hàng"
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    autoFocus
+                  />
+                  <input
+                    className="form-input"
+                    placeholder="Số điện thoại (không bắt buộc)"
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                  />
+                  <div className="quick-customer-actions">
+                    <button className="btn btn-ghost btn-sm" type="button" onClick={() => setShowQuickCustomerForm(false)} disabled={addingCustomer}>
+                      Hủy
+                    </button>
+                    <button className="btn btn-primary btn-sm" type="button" onClick={createQuickCustomer} disabled={addingCustomer}>
+                      {addingCustomer ? 'Đang lưu...' : 'Lưu khách'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

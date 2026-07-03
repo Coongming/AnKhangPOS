@@ -150,7 +150,7 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-// DELETE - Delete product (hard delete if no history, soft delete otherwise)
+// DELETE - Delete product (hard delete only when it has no stock/transaction history)
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -160,15 +160,29 @@ export async function DELETE(request: NextRequest) {
     const product = await prisma.product.findUnique({ where: { id } });
     if (!product) return NextResponse.json({ error: 'Không tìm thấy sản phẩm' }, { status: 404 });
 
-    try {
-      // Try hard delete first
-      await prisma.$transaction(async (tx) => {
-        await tx.stockMovement.deleteMany({ where: { productId: id } });
-        await tx.product.delete({ where: { id } });
+    const [saleItemCount, purchaseItemCount, stockMovementCount] = await Promise.all([
+      prisma.saleItem.count({ where: { productId: id } }),
+      prisma.purchaseItem.count({ where: { productId: id } }),
+      prisma.stockMovement.count({ where: { productId: id } }),
+    ]);
+
+    if (saleItemCount > 0 || purchaseItemCount > 0 || stockMovementCount > 0) {
+      await prisma.product.update({
+        where: { id },
+        data: { isActive: false },
       });
+
+      return NextResponse.json({
+        success: true,
+        mode: 'deactivated',
+        message: `Sản phẩm "${product.name}" đã có lịch sử bán/nhập/chỉnh tồn nên đã được chuyển sang "Ngừng bán" thay vì xóa.`,
+      });
+    }
+
+    try {
+      await prisma.product.delete({ where: { id } });
       return NextResponse.json({ success: true, mode: 'deleted' });
     } catch {
-      // Foreign key constraint → soft delete (mark inactive)
       await prisma.product.update({
         where: { id },
         data: { isActive: false },
