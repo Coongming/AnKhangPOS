@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const products = await prisma.product.findMany({
       where,
       include: { category: true },
-      orderBy: { code: 'asc' },
+      orderBy: { code: 'desc' },
     });
 
     // Replace stock with linked product's stock for products with linkedStockId

@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
         { code: { contains: search, mode: 'insensitive' } },
       ];
     }
-    const customers = await prisma.customer.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const customers = await prisma.customer.findMany({ where, orderBy: { code: 'desc' } });
     return NextResponse.json(customers);
   } catch (error) {
     console.error('Customers GET error:', error);
@@ -36,9 +36,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Khách hàng trùng ${match}: "${existing.name}" (mã: ${existing.code})` }, { status: 400 });
     }
 
-    const last = await prisma.customer.findFirst({ orderBy: { createdAt: 'desc' }, select: { code: true } });
-const lastNum = last?.code ? parseInt(last.code.replace('KH', '')) || 0 : 0;
-const code = `KH${lastNum + 1}`;
+    const last = await prisma.customer.findFirst({ orderBy: { code: 'desc' }, select: { code: true } });
+    const code = generateCode('KH', last?.code || null);
     const customer = await prisma.customer.create({
       data: { code, name: body.name, phone: body.phone || null, address: body.address || null, notes: body.notes || null },
     });

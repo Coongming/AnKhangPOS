@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
         deliveryEmployee: { select: { name: true, code: true } },
         items: { include: { product: { select: { name: true, code: true, unit: true } } } },
       },
-      orderBy: { saleDate: 'desc' },
+      orderBy: { createdAt: 'desc' },
     });
     return NextResponse.json(sales);
   } catch (error) {

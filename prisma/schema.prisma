@@ -52,6 +52,8 @@ model Product {
   templateOutputs BlendTemplate[] @relation("templateOutput")
   templateInputs  BlendTemplateItem[] @relation("templateInput")
   
+  @@index([categoryId])
+  @@index([isActive])
   @@map("products")
 }
 
@@ -117,6 +119,9 @@ model Purchase {
   items         PurchaseItem[]
   debtTransactions DebtTransaction[]
 
+  @@index([supplierId])
+  @@index([purchaseDate])
+  @@index([status])
   @@map("purchases")
 }
 
@@ -132,6 +137,8 @@ model PurchaseItem {
   purchase    Purchase @relation(fields: [purchaseId], references: [id])
   product     Product  @relation(fields: [productId], references: [id])
 
+  @@index([purchaseId])
+  @@index([productId])
   @@map("purchase_items")
 }
 
@@ -161,6 +168,12 @@ model Sale {
   items              SaleItem[]
   debtTransactions   DebtTransaction[]
 
+  @@index([customerId])
+  @@index([saleDate])
+  @@index([status])
+  @@index([saleDate, status])
+  @@index([paymentMethod])
+  @@index([deliveryEmployeeId])
   @@map("sales")
 }
 
@@ -178,6 +191,8 @@ model SaleItem {
   sale        Sale     @relation(fields: [saleId], references: [id])
   product     Product  @relation(fields: [productId], references: [id])
 
+  @@index([saleId])
+  @@index([productId])
   @@map("sale_items")
 }
 
@@ -201,6 +216,12 @@ model DebtTransaction {
   sale        Sale?     @relation(fields: [saleId], references: [id])
   purchase    Purchase? @relation(fields: [purchaseId], references: [id])
 
+  @@index([customerId])
+  @@index([supplierId])
+  @@index([saleId])
+  @@index([purchaseId])
+  @@index([type])
+  @@index([createdAt])
   @@map("debt_transactions")
 }
 
@@ -219,6 +240,10 @@ model StockMovement {
 
   product     Product  @relation(fields: [productId], references: [id])
 
+  @@index([productId])
+  @@index([referenceId])
+  @@index([createdAt])
+  @@index([productId, createdAt])
   @@map("stock_movements")
 }
 
@@ -251,6 +276,8 @@ model Expense {
 
   category    ExpenseCategory @relation(fields: [categoryId], references: [id])
 
+  @@index([categoryId])
+  @@index([date])
   @@map("expenses")
 }
 
@@ -297,6 +324,8 @@ model BlendHistoryItem {
   blend         BlendHistory @relation(fields: [blendId], references: [id])
   product       Product      @relation("blendInput", fields: [productId], references: [id])
 
+  @@index([blendId])
+  @@index([productId])
   @@map("blend_history_items")
 }
 
@@ -329,6 +358,8 @@ model BlendTemplateItem {
   template   BlendTemplate @relation(fields: [templateId], references: [id])
   product    Product       @relation("templateInput", fields: [productId], references: [id])
 
+  @@index([templateId])
+  @@index([productId])
   @@map("blend_template_items")
 }
 
@@ -368,6 +399,9 @@ model EmployeeShift {
 
   employee    Employee @relation(fields: [employeeId], references: [id])
 
+  @@index([employeeId])
+  @@index([date])
+  @@index([employeeId, date])
   @@map("employee_shifts")
 }
 
@@ -388,6 +422,7 @@ model SalaryPayment {
 
   employee    Employee @relation(fields: [employeeId], references: [id])
 
+  @@index([employeeId])
   @@map("salary_payments")
 }
 

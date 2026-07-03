@@ -52,7 +52,6 @@ const navGroups = [
     items: [
       { label: 'Cài đặt', href: '/he-thong/cai-dat', icon: Settings },
       { label: 'Sao lưu', href: '/he-thong/backup', icon: Database },
-      { label: 'Nhật ký', href: '/he-thong/nhat-ky', icon: History },
     ],
   },
 ];

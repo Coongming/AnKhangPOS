@@ -9,12 +9,17 @@ export async function GET(req: NextRequest) {
     const sales = await prisma.sale.findMany({
       where: {
         status: 'completed',
-        customer: {
-          OR: [
-            { name: { contains: q, mode: 'insensitive' } },
-            { phone: { contains: q } },
-          ],
-        },
+        OR: [
+          {
+            customer: {
+              OR: [
+                { name: { contains: q, mode: 'insensitive' } },
+                { phone: { contains: q } },
+                { code: { contains: q, mode: 'insensitive' } },
+              ],
+            },
+          },
+        ],
       },
       include: {
         customer: { select: { name: true, phone: true } },

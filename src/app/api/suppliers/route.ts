@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
         { code: { contains: search, mode: 'insensitive' } },
       ];
     }
-    const suppliers = await prisma.supplier.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const suppliers = await prisma.supplier.findMany({ where, orderBy: { code: 'desc' } });
     return NextResponse.json(suppliers);
   } catch (error) {
     console.error('Suppliers GET error:', error);

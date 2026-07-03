@@ -152,7 +152,9 @@ export default function SalesHistoryPage() {
   const openEdit = (sale: Sale) => {
     setEditSale(sale);
     setEditOriginalDate(sale.saleDate);
-    setEditDate(sale.saleDate.split('T')[0]);
+    // Convert to VN timezone for date picker (YYYY-MM-DD)
+    const vnDateStr = new Date(sale.saleDate).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+    setEditDate(vnDateStr);
     setEditNotes(sale.notes || '');
     setEditCustomerId(sale.customerId || '');
     setEditPaymentMethod(sale.paymentMethod);
@@ -201,9 +203,9 @@ export default function SalesHistoryPage() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: editSale.id, action: 'edit',
-          saleDate: editDate === editOriginalDate.split('T')[0]
+          saleDate: editDate === new Date(editOriginalDate).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' })
             ? editOriginalDate
-            : editDate + 'T' + (editOriginalDate.split('T')[1] || '00:00:00.000Z'),
+            : editDate + 'T00:00:00+07:00',
           notes: editNotes,
           customerId: editCustomerId, paymentMethod: editPaymentMethod,
           items: editItems.map(i => ({
@@ -216,14 +218,6 @@ export default function SalesHistoryPage() {
       showToast('success', 'Đã cập nhật hóa đơn');
       setEditSale(null);
       await fetchData();
-      // Tự động mở hóa đơn mới sau khi sửa
-      const updatedRes = await fetch(`/api/sales?${new URLSearchParams({
-        ...(dateFrom && { dateFrom }),
-        ...(dateTo && { dateTo }),
-      })}`);
-      const updatedSales: Sale[] = await updatedRes.json();
-      const updatedSale = updatedSales.find(s => s.id === editSale.id);
-      if (updatedSale) openInvoice(updatedSale);
     } catch (err) { showToast('error', err instanceof Error ? err.message : 'Lỗi'); }
   };
 

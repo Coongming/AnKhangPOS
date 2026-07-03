@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { X, Download, Image } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 
@@ -29,6 +29,22 @@ interface InvoiceData {
   notes: string | null;
 }
 
+interface StoreSettings {
+  store_name: string;
+  store_phone: string;
+  store_address: string;
+  store_tagline: string;
+  store_slogan: string;
+}
+
+const DEFAULT_SETTINGS: StoreSettings = {
+  store_name: 'Gạo Nước An Khang',
+  store_phone: '0943.956.171 - 0342.262.003',
+  store_address: '424 Lê Duẩn, Phường Ea Kao, Đăk Lăk',
+  store_tagline: 'Gạo Sạch & Nước Uống Chính Hãng',
+  store_slogan: 'Có An Khang, cơm nhà thêm trọn vị!',
+};
+
 interface Props {
   invoice: InvoiceData;
   onClose: () => void;
@@ -37,6 +53,24 @@ interface Props {
 export default function InvoiceModal({ invoice, onClose }: Props) {
   const invoiceRef = useRef<HTMLDivElement>(null);
   const [downloading, setDownloading] = useState(false);
+  const [store, setStore] = useState<StoreSettings>(DEFAULT_SETTINGS);
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(res => res.json())
+      .then((data: { key: string; value: string }[]) => {
+        const map: Record<string, string> = {};
+        data.forEach(s => { map[s.key] = s.value; });
+        setStore({
+          store_name: map.store_name || DEFAULT_SETTINGS.store_name,
+          store_phone: map.store_phone || DEFAULT_SETTINGS.store_phone,
+          store_address: map.store_address || DEFAULT_SETTINGS.store_address,
+          store_tagline: map.store_tagline || DEFAULT_SETTINGS.store_tagline,
+          store_slogan: map.store_slogan || DEFAULT_SETTINGS.store_slogan,
+        });
+      })
+      .catch(() => { /* use defaults */ });
+  }, []);
 
   const handleDownload = async () => {
     if (!invoiceRef.current) return;
@@ -106,14 +140,14 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
             fontSize: 14,
           }}>
             {/* Logo & Tên cửa hàng */}
-            <div style={{ textAlign: 'center', marginBottom: 16, borderBottom: '2px solidrgb(184, 6, 6)', paddingBottom: 16 }}>
+            <div style={{ textAlign: 'center', marginBottom: 16, borderBottom: '2px solid #e53e3e', paddingBottom: 16 }}>
               <img src="/logo.png" alt="Logo" style={{ width: 64, height: 64, borderRadius: 12, objectFit: 'contain', margin: '0 auto 8px', display: 'block' }} />
               <div style={{ fontSize: 24, fontWeight: 800, color: '#e53e3e', lineHeight: 1.2 }}>
-                Gạo Nước <span style={{ fontFamily: 'var(--font-shrikhand), cursive' }}>An Khang</span>
+                {store.store_name}
               </div>
-              <div style={{ fontSize: 14, color: '#666', marginTop: 2, fontWeight: 700 }}>Gạo Sạch & Nước Uống Chính Hãng</div>
-              <div style={{ fontSize: 13, color: '#999', marginTop: 2, fontWeight: 700 }}>📍 424 Lê Duẩn, Phường Ea Kao, Đăk Lăk</div>
-              <div style={{ fontSize: 16, color: '#e53e3e', fontWeight: 800, marginTop: 4 }}>📞 0943.956.171 - 0342.262.003</div>
+              <div style={{ fontSize: 14, color: '#666', marginTop: 2, fontWeight: 700 }}>{store.store_tagline}</div>
+              <div style={{ fontSize: 13, color: '#999', marginTop: 2, fontWeight: 700 }}>📍 {store.store_address}</div>
+              <div style={{ fontSize: 16, color: '#e53e3e', fontWeight: 800, marginTop: 4 }}>📞 {store.store_phone}</div>
             </div>
 
             {/* Thông tin đơn */}
@@ -214,7 +248,11 @@ export default function InvoiceModal({ invoice, onClose }: Props) {
             {/* Footer */}
             <div style={{ marginTop: 16, textAlign: 'center', borderTop: '1px dashed #ddd', paddingTop: 12 }}>
               <div style={{ color: '#999', fontSize: 13, fontWeight: 700 }}>Cảm ơn Quý khách!</div>
-              <div style={{ color: '#e53e3e', fontSize: 12, fontWeight: 700, marginTop: 4, fontStyle: 'italic' }}>Có An Khang, cơm nhà thêm trọn vị!</div>
+              {store.store_slogan && (
+                <div style={{ color: '#e53e3e', fontSize: 12, fontWeight: 700, marginTop: 4, fontStyle: 'italic' }}>
+                  {store.store_slogan}
+                </div>
+              )}
             </div>
           </div>
         </div>

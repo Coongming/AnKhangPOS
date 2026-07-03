@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const settings = await prisma.systemSetting.findMany();
@@ -18,7 +20,7 @@ export async function PUT(request: NextRequest) {
       await prisma.systemSetting.upsert({
         where: { key },
         update: { value: String(value) },
-        create: { key, value: String(value) },
+        create: { id: crypto.randomUUID(), key, value: String(value) },
       });
     }
     return NextResponse.json({ success: true });
