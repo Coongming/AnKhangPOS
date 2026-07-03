@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Receipt, Eye, Trash2, Edit3, Search, Plus, Copy, FileText } from 'lucide-react';
+import { Receipt, Trash2, Edit3, Search, Plus, Copy, FileText } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency, formatDate, formatDateTime, formatOrderForCopy } from '@/lib/utils';
 import InvoiceModal from '@/components/InvoiceModal';
@@ -319,7 +319,6 @@ export default function SalesHistoryPage() {
                     <td style={{ whiteSpace: 'nowrap' }}><span className={`badge ${statusMeta.badgeClass}`}>{statusMeta.label}</span></td>
                     <td className="text-center">
                       <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => setViewSale(s)} title="Xem"><Eye size={14} /></button>
                         {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openInvoice(s)} title="Xuất HĐ" style={{ color: 'var(--accent)' }}><FileText size={14} /></button>}
                         <button className="btn btn-ghost btn-sm" onClick={() => handleCopyOrder(s)} title="Copy đơn"><Copy size={14} /></button>
                         {s.status === 'completed' && <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="Sửa"><Edit3 size={14} /></button>}
