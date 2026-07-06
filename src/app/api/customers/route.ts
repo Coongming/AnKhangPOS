@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     }
 
     const last = await prisma.customer.findFirst({ orderBy: { code: 'desc' }, select: { code: true } });
-    const code = generateCode('KH', last?.code || null);
+    const code = generateCode('KH', last?.code || null, 3);
     const customer = await prisma.customer.create({
       data: { code, name: body.name, phone: body.phone || null, address: body.address || null, notes: body.notes || null },
     });

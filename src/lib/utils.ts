@@ -31,10 +31,10 @@ export function formatDateTime(date: Date | string): string {
 }
 
 // Generate auto-increment code: SP001, NCC001, KH001, PN001, HD001
-export function generateCode(prefix: string, lastCode: string | null): string {
-  if (!lastCode) return `${prefix}0001`;
+export function generateCode(prefix: string, lastCode: string | null, padding = 4): string {
+  if (!lastCode) return `${prefix}${String(1).padStart(padding, '0')}`;
   const num = parseInt(lastCode.replace(prefix, ''), 10);
-  return `${prefix}${String(num + 1).padStart(4, '0')}`;
+  return `${prefix}${String(num + 1).padStart(padding, '0')}`;
 }
 
 
