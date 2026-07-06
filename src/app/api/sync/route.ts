@@ -32,9 +32,16 @@ export async function POST() {
     await execAsync(`psql "${supabaseUrl}" -c "${truncateSQL}"`);
 
     // Step 4: Restore data to Supabase
-    const { stderr } = await execAsync(
-      `psql "${supabaseUrl}" --set ON_ERROR_STOP=off -f "${dumpFile}" 2>&1 || true`
-    );
+    let stderr = '';
+    try {
+      const result = await execAsync(
+        `psql "${supabaseUrl}" --set ON_ERROR_STOP=off -f "${dumpFile}"`
+      );
+      stderr = result.stderr;
+    } catch (e: any) {
+      // psql trả về mã lỗi do warning khôi phục schema, ta cứ lưu lại stderr
+      stderr = e.stderr || e.message;
+    }
 
     // Step 5: Count rows synced
     const countQueries = tables.map(t => `SELECT '${t}' as t, count(*) as c FROM public."${t}"`).join(' UNION ALL ');
