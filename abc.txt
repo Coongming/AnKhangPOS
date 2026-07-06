@@ -1,9 +1,0 @@
-# Connect to Postgres via the shared transaction-mode pooler (IPv4-only)
-DATABASE_URL="postgresql://postgres.mknoguoyuszjyjyvhqls:p0QKnGrxHpx66lla@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
-
-# Connect to Postgres via the shared session-mode pooler (used for migrations)
-DIRECT_URL="postgresql://postgres.mknoguoyuszjyjyvhqls:p0QKnGrxHpx66lla@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
-
-# Auth (tài khoản đăng nhập admin)
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=ankhang123
