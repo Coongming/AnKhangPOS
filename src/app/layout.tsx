@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import Sidebar from '@/components/Sidebar';
+import ChatBot from '@/components/ChatBot';
 import { ToastProvider } from '@/components/Toast';
 import { cookies } from 'next/headers';
 import { Inter, Shrikhand, Dancing_Script } from 'next/font/google';
@@ -50,6 +51,7 @@ export default async function RootLayout({
                   {children}
                 </div>
               </main>
+              <ChatBot />
             </div>
           ) : (
             <>{children}</>
