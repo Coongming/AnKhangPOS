@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import path from 'path';
+import os from 'os';
+import fs from 'fs/promises';
 
 const execAsync = promisify(exec);
 
@@ -10,10 +13,13 @@ export async function POST() {
     return NextResponse.json({ error: 'SUPABASE_DIRECT_URL chưa được cấu hình' }, { status: 500 });
   }
 
+  const dumpFile = path.join(os.tmpdir(), 'sync_dump.sql');
+
   try {
     // Step 1: Dump local data
-    const dumpCmd = `PGPASSWORD=ankhang123 pg_dump -U ankhang -h localhost -d ankhangpos --data-only --no-owner --no-acl --disable-triggers --schema=public -f /tmp/sync_dump.sql`;
-    await execAsync(dumpCmd);
+    // Dùng tùy chọn env thay vì PGPASSWORD=... trong chuỗi lệnh để tương thích Windows
+    const dumpCmd = `pg_dump -U ankhang -h localhost -d ankhangpos --data-only --no-owner --no-acl --disable-triggers --schema=public -f "${dumpFile}"`;
+    await execAsync(dumpCmd, { env: { ...process.env, PGPASSWORD: 'ankhang123' } });
 
     // Step 2: Get list of public tables from Supabase (not local, to avoid missing tables)
     const { stdout: tablesOut } = await execAsync(
@@ -27,7 +33,7 @@ export async function POST() {
 
     // Step 4: Restore data to Supabase
     const { stderr } = await execAsync(
-      `psql "${supabaseUrl}" --set ON_ERROR_STOP=off -f /tmp/sync_dump.sql 2>&1 || true`
+      `psql "${supabaseUrl}" --set ON_ERROR_STOP=off -f "${dumpFile}" 2>&1 || true`
     );
 
     // Step 5: Count rows synced
@@ -43,8 +49,12 @@ export async function POST() {
 
     const totalRows = synced.reduce((sum, r) => sum + r.count, 0);
 
-    // Cleanup
-    await execAsync('rm -f /tmp/sync_dump.sql');
+    // Cleanup (cross-platform)
+    try {
+      await fs.unlink(dumpFile);
+    } catch (e) {
+      // Bỏ qua lỗi nếu file không tồn tại
+    }
 
     // Filter warnings (ignore Supabase internal schema errors)
     const warnings = stderr
@@ -61,6 +71,12 @@ export async function POST() {
   } catch (error) {
     console.error('Sync error:', error);
     const msg = error instanceof Error ? error.message : 'Lỗi không xác định';
+    
+    // Cleanup if failed
+    try {
+      await fs.unlink(dumpFile);
+    } catch (e) {}
+
     return NextResponse.json({ error: `Đồng bộ thất bại: ${msg}` }, { status: 500 });
   }
 }
