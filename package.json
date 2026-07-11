@@ -11,6 +11,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:setup": "prisma db push && tsx prisma/seed.ts",
     "db:update": "tsx scripts/update_local_database.ts",
+    "db:pull-online": "tsx scripts/pull_online_to_local.ts",
+    "db:update-online-schema": "tsx scripts/update_online_schema.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

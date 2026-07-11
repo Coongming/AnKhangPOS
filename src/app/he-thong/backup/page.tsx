@@ -8,7 +8,9 @@ export default function BackupPage() {
   const { showToast } = useToast();
   const [downloading, setDownloading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [syncResult, setSyncResult] = useState<{ message: string; totalRows: number } | null>(null);
+  const [pullResult, setPullResult] = useState<{ message: string; totalRows: number; backupFile?: string } | null>(null);
 
   const handleBackup = async () => {
     setDownloading(true);
@@ -49,6 +51,26 @@ export default function BackupPage() {
       showToast('error', err.message || 'Đồng bộ thất bại');
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handlePullOnline = async () => {
+    if (!confirm('Xác nhận kéo dữ liệu từ Database Online về máy này?\n\nDữ liệu local hiện tại sẽ được backup rồi GHI ĐÈ bằng dữ liệu trên Supabase.')) return;
+
+    setPulling(true);
+    setPullResult(null);
+    try {
+      const res = await fetch('/api/sync/pull', { method: 'POST' });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || 'Lỗi kéo dữ liệu');
+
+      setPullResult({ message: data.message, totalRows: data.totalRows, backupFile: data.backupFile });
+      showToast('success', data.message);
+    } catch (err: any) {
+      showToast('error', err.message || 'Kéo dữ liệu thất bại');
+    } finally {
+      setPulling(false);
     }
   };
 
@@ -191,6 +213,49 @@ export default function BackupPage() {
 
             <div style={{ background: 'var(--info-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--info)' }}>
               ℹ️ <strong>Lưu ý:</strong> Dữ liệu trên cloud sẽ bị <strong>ghi đè hoàn toàn</strong> bằng dữ liệu local. Chỉ dùng khi muốn cập nhật dữ liệu online mới nhất.
+            </div>
+          </div>
+        </div>
+
+        {/* Kéo dữ liệu Online về Local */}
+        <div className="card" style={{ flex: 1, minWidth: 300, maxWidth: 500 }}>
+          <div className="card-header">
+            <h3 className="card-title">
+              <Cloud size={16} style={{ display: 'inline', marginRight: 8, verticalAlign: -3 }} />
+              Kéo DATA Online về Local
+            </h3>
+          </div>
+          <div style={{ padding: '16px 0' }}>
+            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.8, fontSize: 13, marginBottom: 16 }}>
+              Lấy dữ liệu mới nhất từ Database Online (Supabase) về máy này. Hệ thống sẽ backup dữ liệu local trước khi ghi đè.
+            </p>
+
+            <button
+              className="btn btn-outline btn-lg w-full"
+              onClick={handlePullOnline}
+              disabled={pulling}
+              style={{ justifyContent: 'center', height: 48, borderColor: '#0ea5e9', color: '#0ea5e9' }}
+            >
+              {pulling ? (
+                <><Loader2 size={18} style={{ marginRight: 8, animation: 'spin 1s linear infinite' }} /> Đang kéo dữ liệu...</>
+              ) : (
+                <><Download size={18} style={{ marginRight: 8 }} /> Kéo Online về Local</>
+              )}
+            </button>
+
+            {pullResult && (
+              <div style={{ background: 'var(--success-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--success)' }}>
+                {pullResult.message}
+                {pullResult.backupFile && (
+                  <div style={{ marginTop: 6, color: 'var(--text-secondary)' }}>
+                    Backup local: {pullResult.backupFile}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ background: 'var(--danger-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--danger)' }}>
+              <strong>Lưu ý:</strong> Dữ liệu local sẽ bị <strong>ghi đè hoàn toàn</strong> bằng dữ liệu trên cloud. Chỉ dùng sau khi máy khác đã Sync lên Online.
             </div>
           </div>
         </div>
