@@ -43,8 +43,8 @@ export async function GET(request: NextRequest) {
     for (const sale of sales) {
       const dateKey = sale.saleDate.toLocaleDateString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });
       const existing = dailyMap.get(dateKey) || { revenue: 0, profit: 0, orders: 0 };
-      existing.revenue += sale.totalAmount;
-      existing.profit += (sale.totalAmount - sale.totalCost);
+      existing.revenue += Number(sale.totalAmount);
+      existing.profit += (Number(sale.totalAmount) - Number(sale.totalCost));
       existing.orders += 1;
       dailyMap.set(dateKey, existing);
     }

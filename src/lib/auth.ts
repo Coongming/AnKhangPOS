@@ -1,14 +1,22 @@
+import { checkRateLimit, getRateLimitKey, RATE_LIMITS } from './rate-limit';
+
 const AUTH_COOKIE_NAME = 'auth_token';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 
 type SessionPayload = {
   sub: string;
+  role: string;
   iat: number;
   exp: number;
 };
 
 function getAuthSecret(): string | null {
-  return process.env.AUTH_SECRET || process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || null;
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) {
+    console.error('[AUTH] AUTH_SECRET env var is required.');
+    return null;
+  }
+  return secret;
 }
 
 function base64UrlEncode(value: string): string {
@@ -36,7 +44,6 @@ async function sign(value: string, secret: string): Promise<string> {
 
 function safeEqual(left: string, right: string): boolean {
   if (left.length !== right.length) return false;
-
   let diff = 0;
   for (let i = 0; i < left.length; i += 1) {
     diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
@@ -47,45 +54,56 @@ function safeEqual(left: string, right: string): boolean {
 export function getAdminCredentials(): { username: string; password: string } | null {
   const username = process.env.ADMIN_USERNAME;
   const password = process.env.ADMIN_PASSWORD;
-
   if (!username || !password) return null;
   return { username, password };
 }
 
-export async function createAuthToken(username: string): Promise<string> {
+export async function createAuthToken(username: string, role: string = 'admin'): Promise<string> {
   const secret = getAuthSecret();
-  if (!secret) throw new Error('Missing auth secret');
+  if (!secret) throw new Error('Missing AUTH_SECRET env var');
 
   const now = Math.floor(Date.now() / 1000);
-  const payload: SessionPayload = {
-    sub: username,
-    iat: now,
-    exp: now + SESSION_TTL_SECONDS,
-  };
+  const payload: SessionPayload = { sub: username, role, iat: now, exp: now + SESSION_TTL_SECONDS };
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signature = await sign(encodedPayload, secret);
-
   return `${encodedPayload}.${signature}`;
 }
 
 export async function verifyAuthToken(token: string | undefined | null): Promise<boolean> {
   if (!token) return false;
-
   const secret = getAuthSecret();
   if (!secret) return false;
-
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return false;
-
   const expectedSignature = await sign(encodedPayload, secret);
   if (!safeEqual(signature, expectedSignature)) return false;
-
   try {
     const payload = JSON.parse(base64UrlDecode(encodedPayload)) as Partial<SessionPayload>;
     return typeof payload.exp === 'number' && payload.exp > Math.floor(Date.now() / 1000);
   } catch {
     return false;
   }
+}
+
+export async function parseAuthToken(token: string | undefined | null): Promise<{ sub: string; role: string } | null> {
+  if (!token) return null;
+  const secret = getAuthSecret();
+  if (!secret) return null;
+  const [encodedPayload, signature] = token.split('.');
+  if (!encodedPayload || !signature) return null;
+  const expectedSignature = await sign(encodedPayload, secret);
+  if (!safeEqual(signature, expectedSignature)) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecode(encodedPayload)) as Partial<SessionPayload>;
+    if (typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) return null;
+    return { sub: payload.sub || '', role: payload.role || 'admin' };
+  } catch {
+    return null;
+  }
+}
+
+export function checkLoginRateLimit(ip: string): { allowed: boolean; retryAfterMs: number } {
+  return checkRateLimit(getRateLimitKey(ip, 'login'), RATE_LIMITS.login);
 }
 
 export function getAuthCookieOptions() {

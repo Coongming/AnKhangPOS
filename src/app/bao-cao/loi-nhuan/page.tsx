@@ -41,9 +41,9 @@ export default function ProfitReportPage() {
 
       <div className="toolbar">
         <div className="toolbar-left">
-          {['day', 'week', 'month', 'year'].map((p) => (
+          {['all', 'day', 'week', 'month', 'year'].map((p) => (
             <button key={p} className={`btn ${period === p ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setPeriod(p); setDateFrom(''); setDateTo(''); }}>
-              {{ day: 'Hôm nay', week: '7 ngày', month: 'Tháng', year: 'Năm' }[p]}
+              {{ all: 'Tất cả', day: 'Hôm nay', week: '7 ngày', month: 'Tháng', year: 'Năm' }[p]}
             </button>
           ))}
           <span className="text-muted" style={{ margin: '0 8px' }}>|</span>
@@ -80,6 +80,10 @@ export default function ProfitReportPage() {
                 <span style={{ fontWeight: 800, fontSize: 22, color: data.netProfit >= 0 ? 'var(--success)' : 'var(--danger)' }}>{formatCurrency(data.netProfit)}</span>
               </div>
             </div>
+          </div>
+
+          <div style={{ background: 'var(--info-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginBottom: 24, fontSize: 13, color: 'var(--info)' }}>
+            💡 Chỉ tính <strong>chi phí vận hành</strong> (điện, nước, lương NV...). Khoản rút lợi nhuận / nộp vốn xem tại <a href="/bao-cao/so-quy" style={{ fontWeight: 700, textDecoration: 'underline' }}>Sổ quỹ</a>.
           </div>
 
           {/* Expense Breakdown */}

@@ -90,11 +90,38 @@ function parseBackupData(body: unknown): BackupData | null {
 
 export async function POST(request: NextRequest) {
   try {
+    // Giới hạn payload 50MB
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 50 * 1024 * 1024) {
+      return NextResponse.json({ error: 'File backup quá lớn (tối đa 50MB)' }, { status: 413 });
+    }
+
     const body = await request.json();
+
+    // Kiểm tra version nếu có
+    if (body && typeof body === 'object' && body.version && typeof body.version === 'string') {
+      const supportedVersions = ['1.0', '1.1', '2.0'];
+      if (!supportedVersions.includes(body.version)) {
+        return NextResponse.json({ error: `Phiên bản backup không hỗ trợ: ${body.version}` }, { status: 400 });
+      }
+    }
+
     const data = parseBackupData(body);
 
     if (!data) {
       return NextResponse.json({ error: 'File backup không đúng định dạng' }, { status: 400 });
+    }
+
+    // Validate: giới hạn số lượng record mỗi bảng
+    const MAX_RECORDS = 100_000;
+    for (const collection of BACKUP_COLLECTIONS) {
+      const arr = data[collection];
+      if (arr && arr.length > MAX_RECORDS) {
+        return NextResponse.json(
+          { error: `Bảng ${collection} vượt quá ${MAX_RECORDS} records (có ${arr.length})` },
+          { status: 400 }
+        );
+      }
     }
 
     // Execute in a transaction to ensure all or nothing

@@ -15,7 +15,7 @@ export async function recalcCustomerDebt(tx: TxClient, customerId: string): Prom
     where: { customerId, status: 'completed' },
     _sum: { debtAmount: true },
   });
-  const totalSaleDebt = salesDebt._sum.debtAmount || 0;
+  const totalSaleDebt = Number(salesDebt._sum.debtAmount || 0);
 
   // 2. Tổng thanh toán nợ thực tế (từ trang Công nợ — không có saleId)
   const payments = await tx.debtTransaction.aggregate({
@@ -27,7 +27,7 @@ export async function recalcCustomerDebt(tx: TxClient, customerId: string): Prom
     _sum: { amount: true },
   });
   // amount là số âm (VD: -200000) nên cần abs
-  const totalPayments = Math.abs(payments._sum.amount || 0);
+  const totalPayments = Math.abs(Number(payments._sum.amount || 0));
 
   // 3. Debt = nợ từ HĐ - đã trả
   const correctDebt = Math.max(0, totalSaleDebt - totalPayments);
@@ -47,10 +47,10 @@ export async function recalcCustomerDebt(tx: TxClient, customerId: string): Prom
 export async function recalcSupplierDebt(tx: TxClient, supplierId: string): Promise<number> {
   // 1. Tổng nợ từ phiếu nhập completed
   const purchaseDebt = await tx.purchase.aggregate({
-    where: { supplierId, status: 'completed' },
+    where: { supplierId, status: 'completed', type: 'purchase' },
     _sum: { debtAmount: true },
   });
-  const totalPurchaseDebt = purchaseDebt._sum.debtAmount || 0;
+  const totalPurchaseDebt = Number(purchaseDebt._sum.debtAmount || 0);
 
   // 2. Tổng thanh toán nợ thực tế
   const payments = await tx.debtTransaction.aggregate({
@@ -61,10 +61,11 @@ export async function recalcSupplierDebt(tx: TxClient, supplierId: string): Prom
     },
     _sum: { amount: true },
   });
-  const totalPayments = Math.abs(payments._sum.amount || 0);
+  const totalPayments = Math.abs(Number(payments._sum.amount || 0));
 
-  // 3. Debt = nợ từ phiếu nhập - đã trả
-  const correctDebt = Math.max(0, totalPurchaseDebt - totalPayments);
+  // 3. Debt = nợ từ phiếu nhập - đã trả.
+  // Cho phép âm để thể hiện tiền ứng trước/trả dư cho nhà cung cấp.
+  const correctDebt = totalPurchaseDebt - totalPayments;
 
   // 4. Update
   await tx.supplier.update({

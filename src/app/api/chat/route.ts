@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 
     // Format inventory data
     const inventoryText = products.map(p =>
-      `- ${p.code} ${p.name} (${p.category.name}): tồn ${p.stock} ${p.unit}, giá vốn ${Math.round(p.costPrice).toLocaleString('vi-VN')}đ/${p.unit}, giá bán ${Math.round(p.salePrice).toLocaleString('vi-VN')}đ/${p.unit}, tồn tối thiểu ${p.minStock} ${p.unit}`
+      `- ${p.code} ${p.name} (${p.category.name}): tồn ${p.stock} ${p.unit}, giá vốn ${Math.round(Number(p.costPrice)).toLocaleString('vi-VN')}đ/${p.unit}, giá bán ${Math.round(Number(p.salePrice)).toLocaleString('vi-VN')}đ/${p.unit}, tồn tối thiểu ${p.minStock} ${p.unit}`
     ).join('\n');
 
     // Format sales data
@@ -57,16 +57,16 @@ export async function POST(req: NextRequest) {
       .filter(s => productMap.has(s.productId))
       .map(s => {
         const p = productMap.get(s.productId)!;
-        return `- ${p.name}: bán ${s._sum.quantity} ${p.unit} (${s._count.id} đơn), doanh thu ${Math.round(s._sum.totalPrice || 0).toLocaleString('vi-VN')}đ`;
+        return `- ${p.name}: bán ${s._sum.quantity} ${p.unit} (${s._count.id} đơn), doanh thu ${Math.round(Number(s._sum.totalPrice || 0)).toLocaleString('vi-VN')}đ`;
       }).join('\n');
 
     // Format suppliers
     const suppliersText = suppliers.map(s =>
-      `- ${s.code} ${s.name}${s.phone ? ` (${s.phone})` : ''}: công nợ ${Math.round(s.debt).toLocaleString('vi-VN')}đ`
+      `- ${s.code} ${s.name}${s.phone ? ` (${s.phone})` : ''}: công nợ ${Math.round(Number(s.debt)).toLocaleString('vi-VN')}đ`
     ).join('\n');
 
     // Low stock alerts
-    const lowStock = products.filter(p => p.stock <= p.minStock && p.minStock > 0);
+    const lowStock = products.filter(p => Number(p.stock) <= Number(p.minStock) && Number(p.minStock) > 0);
     const lowStockText = lowStock.length > 0
       ? lowStock.map(p => `- ⚠️ ${p.name}: tồn ${p.stock} ${p.unit} (tối thiểu ${p.minStock} ${p.unit})`).join('\n')
       : '- Không có sản phẩm nào dưới mức tồn tối thiểu';

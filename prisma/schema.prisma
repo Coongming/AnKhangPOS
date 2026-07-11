@@ -13,7 +13,7 @@ datasource db {
 model ProductCategory {
   id           String    @id @default(cuid())
   name         String    @unique // Gạo, Nước, Khác
-  deliveryRate Float     @default(0) @map("delivery_rate") // Giá ship/đơn vị (VNĐ)
+  deliveryRate Decimal   @default(0) @map("delivery_rate") @db.Decimal(15, 0) // Giá ship/đơn vị (VNĐ)
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
   products     Product[]
@@ -30,11 +30,11 @@ model Product {
   name          String          // Tên sản phẩm
   categoryId    String          @map("category_id")
   unit          String          // kg, bao, chai, thùng
-  salePrice     Float           @default(0) @map("sale_price") // Giá bán mặc định
-  costPrice     Float           @default(0) @map("cost_price") // Giá vốn BQ hiện tại
-  lastPurchasePrice Float?      @map("last_purchase_price") // Giá nhập gần nhất
-  stock         Float           @default(0) // Tồn kho hiện tại
-  minStock      Float           @default(0) @map("min_stock") // Tồn kho tối thiểu cảnh báo
+  salePrice     Decimal         @default(0) @map("sale_price") @db.Decimal(15, 0) // Giá bán mặc định
+  costPrice     Decimal         @default(0) @map("cost_price") @db.Decimal(15, 0) // Giá vốn BQ hiện tại
+  lastPurchasePrice Decimal?    @map("last_purchase_price") @db.Decimal(15, 0) // Giá nhập gần nhất
+  stock         Decimal         @default(0) @db.Decimal(15, 2) // Tồn kho hiện tại
+  minStock      Decimal         @default(0) @map("min_stock") @db.Decimal(15, 2) // Tồn kho tối thiểu cảnh báo
   barcode       String?         // Chừa sẵn cho v2
   isActive      Boolean         @default(true) @map("is_active")
   linkedStockId String? @map("linked_stock_id")
@@ -67,7 +67,7 @@ model Supplier {
   phone     String?
   address   String?
   notes     String?
-  debt      Float      @default(0) // Tổng công nợ phải trả
+  debt      Decimal    @default(0) @db.Decimal(15, 0) // Tổng công nợ phải trả
   isActive  Boolean    @default(true) @map("is_active")
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
@@ -88,7 +88,7 @@ model Customer {
   phone     String?
   address   String?
   notes     String?
-  debt      Float     @default(0) // Tổng công nợ phải thu
+  debt      Decimal   @default(0) @db.Decimal(15, 0) // Tổng công nợ phải thu
   isActive  Boolean   @default(true) @map("is_active")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -107,11 +107,12 @@ model Purchase {
   code          String         @unique // Mã phiếu nhập
   supplierId    String         @map("supplier_id")
   purchaseDate  DateTime       @default(now()) @map("purchase_date")
-  totalAmount   Float          @default(0) @map("total_amount") // Tổng tiền phiếu
-  paidAmount    Float          @default(0) @map("paid_amount") // Đã trả
-  debtAmount    Float          @default(0) @map("debt_amount") // Còn nợ
+  totalAmount   Decimal        @default(0) @map("total_amount") @db.Decimal(15, 0) // Tổng tiền phiếu
+  paidAmount    Decimal        @default(0) @map("paid_amount") @db.Decimal(15, 0) // Đã trả
+  debtAmount    Decimal        @default(0) @map("debt_amount") @db.Decimal(15, 0) // Còn nợ
   notes         String?
   status        String         @default("completed") // completed, cancelled
+  type          String         @default("purchase")   // purchase = nhập, return = trả
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
 
@@ -129,9 +130,9 @@ model PurchaseItem {
   id          String   @id @default(cuid())
   purchaseId  String   @map("purchase_id")
   productId   String   @map("product_id")
-  quantity    Float    // Số lượng nhập
-  unitPrice   Float    @map("unit_price") // Giá nhập
-  totalPrice  Float    @map("total_price") // Thành tiền
+  quantity    Decimal  @db.Decimal(15, 2) // Số lượng nhập
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(15, 0) // Giá nhập
+  totalPrice  Decimal  @map("total_price") @db.Decimal(15, 0) // Thành tiền
   createdAt   DateTime @default(now()) @map("created_at")
 
   purchase    Purchase @relation(fields: [purchaseId], references: [id])
@@ -151,12 +152,12 @@ model Sale {
   customerId         String?    @map("customer_id")
   deliveryEmployeeId String?    @map("delivery_employee_id")
   saleDate           DateTime   @default(now()) @map("sale_date")
-  subtotal           Float      @default(0)
-  discount           Float      @default(0)
-  totalAmount        Float      @default(0) @map("total_amount")
-  totalCost          Float      @default(0) @map("total_cost")
-  paidAmount         Float      @default(0) @map("paid_amount")
-  debtAmount         Float      @default(0) @map("debt_amount")
+  subtotal           Decimal    @default(0) @db.Decimal(15, 0)
+  discount           Decimal    @default(0) @db.Decimal(15, 0)
+  totalAmount        Decimal    @default(0) @map("total_amount") @db.Decimal(15, 0)
+  totalCost          Decimal    @default(0) @map("total_cost") @db.Decimal(15, 0)
+  paidAmount         Decimal    @default(0) @map("paid_amount") @db.Decimal(15, 0)
+  debtAmount         Decimal    @default(0) @map("debt_amount") @db.Decimal(15, 0)
   notes              String?
   paymentMethod      String     @default("cash") @map("payment_method")
   status             String     @default("completed")
@@ -181,11 +182,11 @@ model SaleItem {
   id          String   @id @default(cuid())
   saleId      String   @map("sale_id")
   productId   String   @map("product_id")
-  quantity    Float    // Số lượng bán
-  unitPrice   Float    @map("unit_price") // Đơn giá bán
-  costPrice   Float    @map("cost_price") // Giá vốn tại thời điểm bán
-  discount    Float    @default(0) // Giảm giá dòng
-  totalPrice  Float    @map("total_price") // Thành tiền
+  quantity    Decimal  @db.Decimal(15, 2) // Số lượng bán
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(15, 0) // Đơn giá bán
+  costPrice   Decimal  @map("cost_price") @db.Decimal(15, 0) // Giá vốn tại thời điểm bán
+  discount    Decimal  @default(0) @db.Decimal(15, 0) // Giảm giá dòng
+  totalPrice  Decimal  @map("total_price") @db.Decimal(15, 0) // Thành tiền
   createdAt   DateTime @default(now()) @map("created_at")
 
   sale        Sale     @relation(fields: [saleId], references: [id])
@@ -206,8 +207,8 @@ model DebtTransaction {
   supplierId  String?   @map("supplier_id")
   saleId      String?   @map("sale_id")
   purchaseId  String?   @map("purchase_id")
-  amount      Float     // Số tiền (dương = phát sinh nợ, âm = trả nợ)
-  balanceAfter Float    @map("balance_after") // Số dư sau giao dịch
+  amount      Decimal   @db.Decimal(15, 0) // Số tiền (dương = phát sinh nợ, âm = trả nợ)
+  balanceAfter Decimal  @map("balance_after") @db.Decimal(15, 0) // Số dư sau giao dịch
   notes       String?
   createdAt   DateTime  @default(now()) @map("created_at")
 
@@ -232,8 +233,8 @@ model StockMovement {
   id          String   @id @default(cuid())
   productId   String   @map("product_id")
   type        String   // purchase, sale, sale_cancel, purchase_cancel, adjustment
-  quantity    Float    // Dương = nhập, Âm = xuất
-  stockAfter  Float    @map("stock_after") // Tồn kho sau biến động
+  quantity    Decimal  @db.Decimal(15, 2) // Dương = nhập, Âm = xuất
+  stockAfter  Decimal  @map("stock_after") @db.Decimal(15, 2) // Tồn kho sau biến động
   referenceId String?  @map("reference_id") // ID phiếu nhập/hóa đơn
   notes       String?
   createdAt   DateTime @default(now()) @map("created_at")
@@ -253,6 +254,7 @@ model StockMovement {
 model ExpenseCategory {
   id        String    @id @default(cuid())
   name      String    @unique
+  type      String    @default("operating") // "operating" = chi phí vận hành | "cashflow" = lưu chuyển tiền tệ
   isActive  Boolean   @default(true) @map("is_active")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -267,7 +269,7 @@ model ExpenseCategory {
 model Expense {
   id          String          @id @default(cuid())
   categoryId  String          @map("category_id")
-  amount      Float
+  amount      Decimal  @db.Decimal(15, 0)
   date        DateTime        @default(now())
   description String?
   notes       String?
@@ -303,8 +305,8 @@ model BlendHistory {
   id              String             @id @default(cuid())
   code            String             @unique // Mã phiếu trộn: TR001, TR002
   outputProductId String             @map("output_product_id")
-  outputQuantity  Float              @map("output_quantity") // Tổng SL đầu ra
-  outputCostPrice Float              @map("output_cost_price") // Giá vốn BQ đầu ra
+  outputQuantity  Decimal            @map("output_quantity") @db.Decimal(15, 2) // Tổng SL đầu ra
+  outputCostPrice Decimal            @map("output_cost_price") @db.Decimal(15, 0) // Giá vốn BQ đầu ra
   notes           String?
   createdAt       DateTime           @default(now()) @map("created_at")
 
@@ -318,8 +320,8 @@ model BlendHistoryItem {
   id            String       @id @default(cuid())
   blendId       String       @map("blend_id")
   productId     String       @map("product_id")
-  quantity      Float        // SL nguyên liệu
-  costPrice     Float        @map("cost_price") // Giá vốn tại thời điểm trộn
+  quantity      Decimal      @db.Decimal(15, 2) // SL nguyên liệu
+  costPrice     Decimal      @map("cost_price") @db.Decimal(15, 0) // Giá vốn tại thời điểm trộn
 
   blend         BlendHistory @relation(fields: [blendId], references: [id])
   product       Product      @relation("blendInput", fields: [productId], references: [id])
@@ -353,7 +355,7 @@ model BlendTemplateItem {
   id         String        @id @default(cuid())
   templateId String        @map("template_id")
   productId  String        @map("product_id")
-  quantity   Float         // SL nguyên liệu
+  quantity   Decimal       @db.Decimal(15, 2) // SL nguyên liệu
 
   template   BlendTemplate @relation(fields: [templateId], references: [id])
   product    Product       @relation("templateInput", fields: [productId], references: [id])
@@ -372,8 +374,8 @@ model Employee {
   name        String
   phone       String?
   salaryType  String          @default("delivery") @map("salary_type") // hourly, delivery, both
-  hourlyRate  Float           @default(0) @map("hourly_rate") // Lương/giờ
-  deliveryRate Float          @default(0) @map("delivery_rate") // Lương/bình (đơn vị)
+  hourlyRate  Decimal         @default(0) @map("hourly_rate") @db.Decimal(15, 0) // Lương/giờ
+  deliveryRate Decimal        @default(0) @map("delivery_rate") @db.Decimal(15, 0) // Lương/bình (đơn vị)
   isActive    Boolean         @default(true) @map("is_active")
   notes       String?
   createdAt   DateTime        @default(now()) @map("created_at")
@@ -393,7 +395,7 @@ model EmployeeShift {
   date        DateTime // Ngày làm
   startTime   String   @map("start_time") // "07:00"
   endTime     String   @map("end_time") // "10:00"
-  hours       Float    // Số giờ = end - start
+  hours       Decimal  @db.Decimal(5, 2) // Số giờ = end - start
   notes       String?
   createdAt   DateTime @default(now()) @map("created_at")
 
@@ -412,9 +414,9 @@ model SalaryPayment {
   periodType  String   @map("period_type") // daily, weekly, monthly
   periodStart DateTime @map("period_start")
   periodEnd   DateTime @map("period_end")
-  hourlyPay   Float    @default(0) @map("hourly_pay")
-  deliveryPay Float    @default(0) @map("delivery_pay")
-  totalPay    Float    @default(0) @map("total_pay")
+  hourlyPay   Decimal  @default(0) @map("hourly_pay") @db.Decimal(15, 0)
+  deliveryPay Decimal  @default(0) @map("delivery_pay") @db.Decimal(15, 0)
+  totalPay    Decimal  @default(0) @map("total_pay") @db.Decimal(15, 0)
   type        String   @default("salary") // salary, advance (ứng lương)
   expenseId   String?  @map("expense_id") // Link đến chi phí tự tạo
   notes       String?

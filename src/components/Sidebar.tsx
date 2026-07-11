@@ -30,7 +30,7 @@ const navGroups = [
     items: [
       { label: 'Bán hàng', href: '/ban-hang', icon: ShoppingCart },
       { label: 'Lịch sử bán hàng', href: '/lich-su-ban-hang', icon: Receipt },
-      { label: 'Nhập hàng', href: '/nhap-hang', icon: ClipboardList },
+      { label: 'Nhập/Trả hàng', href: '/nhap-hang', icon: ClipboardList },
       { label: 'Công nợ', href: '/cong-no', icon: Wallet },
       { label: 'Chi phí', href: '/chi-phi', icon: DollarSign },
       { label: 'Trộn gạo', href: '/tron-gao', icon: Beaker },
@@ -42,7 +42,7 @@ const navGroups = [
     items: [
       { label: 'Doanh thu', href: '/bao-cao/doanh-thu', icon: BarChart3 },
       { label: 'Lợi nhuận', href: '/bao-cao/loi-nhuan', icon: TrendingUp },
-      { label: 'Công nợ', href: '/bao-cao/cong-no', icon: FileText },
+      { label: 'Sổ quỹ', href: '/bao-cao/so-quy', icon: Wallet },
       { label: 'Tồn kho', href: '/bao-cao/ton-kho', icon: PackageSearch },
       { label: 'Xuất báo cáo', href: '/xuat-bao-cao', icon: FileDown },
     ],

@@ -9,6 +9,14 @@ interface Customer { id: string; code: string; name: string; debt: number; phone
 interface Supplier { id: string; code: string; name: string; debt: number; phone: string | null; }
 interface DebtTransaction { id: string; type: string; amount: number; balanceAfter: number; notes: string | null; createdAt: string; customer?: { name: string } | null; supplier?: { name: string } | null; }
 
+const supplierDebtLabel = (amount: number) => (
+  amount < 0 ? `Ứng trước ${formatCurrency(Math.abs(amount))}` : formatCurrency(amount)
+);
+
+const supplierDebtColor = (amount: number) => (
+  amount > 0 ? 'var(--danger)' : amount < 0 ? 'var(--success)' : 'var(--text-muted)'
+);
+
 export default function DebtPage() {
   const { showToast } = useToast();
   const [tab, setTab] = useState<'customer' | 'supplier'>('customer');
@@ -29,7 +37,7 @@ export default function DebtPage() {
         fetch(`/api/debts?type=${tab}`),
       ]);
       setCustomers((await custRes.json()).filter((c: Customer) => c.debt > 0));
-      setSuppliers((await supRes.json()).filter((s: Supplier) => s.debt > 0));
+      setSuppliers((await supRes.json()).filter((s: Supplier) => s.debt !== 0));
       setTransactions(await txRes.json());
     } catch { showToast('error', 'Lỗi tải dữ liệu'); }
     finally { setLoading(false); }
@@ -60,7 +68,9 @@ export default function DebtPage() {
   };
 
   const debtEntities = tab === 'customer' ? customers : suppliers;
-  const totalDebt = debtEntities.reduce((sum, e) => sum + e.debt, 0);
+  const supplierPayable = suppliers.filter(s => s.debt > 0).reduce((sum, s) => sum + s.debt, 0);
+  const supplierCredit = suppliers.filter(s => s.debt < 0).reduce((sum, s) => sum + Math.abs(s.debt), 0);
+  const totalDebt = tab === 'customer' ? customers.reduce((sum, e) => sum + e.debt, 0) : supplierPayable;
 
   return (
     <div>
@@ -86,7 +96,11 @@ export default function DebtPage() {
         <div className="stat-content">
           <h3>{tab === 'customer' ? 'Tổng phải thu' : 'Tổng phải trả'}</h3>
           <div className="stat-value" style={{ color: tab === 'customer' ? 'var(--warning)' : 'var(--danger)' }}>{formatCurrency(totalDebt)}</div>
-          <div className="stat-sub">{debtEntities.length} {tab === 'customer' ? 'khách nợ' : 'NCC nợ'}</div>
+          <div className="stat-sub">
+            {tab === 'customer'
+              ? `${debtEntities.length} khách nợ`
+              : `${suppliers.filter(s => s.debt > 0).length} NCC nợ${supplierCredit > 0 ? ` • Ứng trước ${formatCurrency(supplierCredit)}` : ''}`}
+          </div>
         </div>
       </div>
 
@@ -95,14 +109,14 @@ export default function DebtPage() {
           {/* Debt List */}
           <div className="card">
             <div className="card-header">
-              <h3 className="card-title">{tab === 'customer' ? 'Danh sách khách nợ' : 'Danh sách NCC nợ'}</h3>
+              <h3 className="card-title">{tab === 'customer' ? 'Danh sách khách nợ' : 'Danh sách công nợ NCC'}</h3>
             </div>
             {debtEntities.length === 0 ? (
               <div className="empty-state"><Wallet /><h3>Không có công nợ</h3></div>
             ) : (
               <div className="table-wrapper">
                 <table className="table">
-                  <thead><tr><th>Tên</th><th className="text-right">Số nợ</th><th className="text-center">Thao tác</th></tr></thead>
+                  <thead><tr><th>Tên</th><th className="text-right">Công nợ</th><th className="text-center">Thao tác</th></tr></thead>
                   <tbody>
                     {debtEntities.map((e) => (
                       <tr key={e.id}>
@@ -110,11 +124,17 @@ export default function DebtPage() {
                           <div style={{ fontWeight: 600 }}>{e.name}</div>
                           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{e.code} {e.phone ? `• ${e.phone}` : ''}</div>
                         </td>
-                        <td className="text-right" style={{ fontWeight: 700, color: 'var(--danger)' }}>{formatCurrency(e.debt)}</td>
+                        <td className="text-right" style={{ fontWeight: 700, color: tab === 'supplier' ? supplierDebtColor(e.debt) : 'var(--danger)' }}>
+                          {tab === 'supplier' ? supplierDebtLabel(e.debt) : formatCurrency(e.debt)}
+                        </td>
                         <td className="text-center">
-                          <button className="btn btn-success btn-sm" onClick={() => openPay(e.id, e.name, e.debt, tab === 'customer' ? 'customer_payment' : 'supplier_payment')}>
-                            <DollarSign size={14} /> {tab === 'customer' ? 'Thu nợ' : 'Trả nợ'}
-                          </button>
+                          {tab === 'supplier' && e.debt < 0 ? (
+                            <span className="badge badge-success">Ứng trước</span>
+                          ) : (
+                            <button className="btn btn-success btn-sm" onClick={() => openPay(e.id, e.name, e.debt, tab === 'customer' ? 'customer_payment' : 'supplier_payment')}>
+                              <DollarSign size={14} /> {tab === 'customer' ? 'Thu nợ' : 'Trả nợ'}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}

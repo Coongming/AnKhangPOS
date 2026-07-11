@@ -18,10 +18,10 @@ export async function GET() {
       },
     });
 
-    const todayRevenue = todaySales.reduce((sum, s) => sum + s.totalAmount, 0);
+    const todayRevenue = todaySales.reduce((sum, s) => sum + Number(s.totalAmount), 0);
     const todayOrders = todaySales.length;
-    const todayCashRevenue = todaySales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0);
-    const todayTransferRevenue = todaySales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + s.totalAmount, 0);
+    const todayCashRevenue = todaySales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.totalAmount), 0);
+    const todayTransferRevenue = todaySales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + Number(s.totalAmount), 0);
 
     // Debt totals
     const customerDebtAgg = await prisma.customer.aggregate({
@@ -68,7 +68,7 @@ export async function GET() {
     // Calculate virtual stock for blend products
     await applyBlendVirtualStock(allProducts);
 
-    const lowStockProducts = allProducts.filter(p => p.stock <= p.minStock).slice(0, 10);
+    const lowStockProducts = allProducts.filter(p => Number(p.stock) <= Number(p.minStock)).slice(0, 10);
 
     // Recent sales
     const recentSales = await prisma.sale.findMany({

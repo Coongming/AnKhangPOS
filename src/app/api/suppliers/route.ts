@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode } from '@/lib/utils';
+import { generateCode, generateCodeInTx } from '@/lib/utils';
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,10 +36,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `NCC trùng ${match}: "${existing.name}" (mã: ${existing.code})` }, { status: 400 });
     }
 
-    const last = await prisma.supplier.findFirst({ orderBy: { code: 'desc' }, select: { code: true } });
-    const code = generateCode('NCC', last?.code || null);
-    const supplier = await prisma.supplier.create({
-      data: { code, name: body.name, phone: body.phone || null, address: body.address || null, notes: body.notes || null },
+    const supplier = await prisma.$transaction(async (tx) => {
+      const code = await generateCodeInTx(tx, 'NCC', 'supplier');
+      return tx.supplier.create({
+        data: { code, name: body.name, phone: body.phone || null, address: body.address || null, notes: body.notes || null },
+      });
     });
     return NextResponse.json(supplier, { status: 201 });
   } catch (error) {

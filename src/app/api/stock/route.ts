@@ -27,15 +27,7 @@ export async function GET(request: NextRequest) {
         }),
       ]);
 
-      // Tính lại stockAfter động từ tồn kho hiện tại
-      // Đi từ mới→cũ: stockAfter[0] = currentStock, stockAfter[i] = stockAfter[i-1] - qty[i-1]
-      if (product) {
-        let runningStock = product.stock;
-        for (const m of movements) {
-          m.stockAfter = runningStock;
-          runningStock -= m.quantity;
-        }
-      }
+      // stockAfter đã được lưu chính xác trong DB, không cần tính lại
 
       return NextResponse.json(movements);
     }
@@ -105,7 +97,7 @@ export async function POST(request: NextRequest) {
       : product;
     if (!targetProduct) return NextResponse.json({ error: 'Sản phẩm liên kết kho không tồn tại' }, { status: 404 });
 
-    const diff = actual - targetProduct.stock;
+    const diff = actual - Number(targetProduct.stock);
     if (diff === 0) return NextResponse.json({ message: 'Không có thay đổi' });
 
     await prisma.$transaction(async (tx) => {

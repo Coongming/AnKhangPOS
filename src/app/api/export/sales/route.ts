@@ -35,9 +35,9 @@ export async function GET(req: NextRequest) {
           'Đơn giá': item.unitPrice,
           'Giảm giá': item.discount,
           'Thành tiền': item.totalPrice,
-          'Giá vốn': item.costPrice * item.quantity,
-          'Lợi nhuận': item.totalPrice - item.costPrice * item.quantity,
-          'Thanh toán': sale.debtAmount > 0 ? `Nợ ${sale.debtAmount.toLocaleString('vi-VN')}đ` : sale.paymentMethod === 'cash' ? 'Tiền mặt' : 'Chuyển khoản',
+          'Giá vốn': Number(item.costPrice) * Number(item.quantity),
+          'Lợi nhuận': Number(item.totalPrice) - Number(item.costPrice) * Number(item.quantity),
+          'Thanh toán': Number(sale.debtAmount) > 0 ? `Nợ ${Number(sale.debtAmount).toLocaleString('vi-VN')}đ` : sale.paymentMethod === 'cash' ? 'Tiền mặt' : 'Chuyển khoản',
         });
       });
     });
@@ -53,18 +53,18 @@ export async function GET(req: NextRequest) {
         const key = item.product.id;
         const existing = productMap.get(key);
         if (existing) {
-          existing.quantity += item.quantity;
-          existing.revenue += item.totalPrice;
-          existing.cost += item.costPrice * item.quantity;
-          existing.profit += item.totalPrice - item.costPrice * item.quantity;
+          existing.quantity += Number(item.quantity);
+          existing.revenue += Number(item.totalPrice);
+          existing.cost += Number(item.costPrice) * Number(item.quantity);
+          existing.profit += Number(item.totalPrice) - Number(item.costPrice) * Number(item.quantity);
         } else {
           productMap.set(key, {
             name: item.product.name,
             unit: item.product.unit,
-            quantity: item.quantity,
-            revenue: item.totalPrice,
-            cost: item.costPrice * item.quantity,
-            profit: item.totalPrice - item.costPrice * item.quantity,
+            quantity: Number(item.quantity),
+            revenue: Number(item.totalPrice),
+            cost: Number(item.costPrice) * Number(item.quantity),
+            profit: Number(item.totalPrice) - Number(item.costPrice) * Number(item.quantity),
           });
         }
       });

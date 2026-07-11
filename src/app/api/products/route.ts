@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode } from '@/lib/utils';
+import { generateCode, generateCodeInTx } from '@/lib/utils';
 import { applyBlendVirtualStock } from '@/lib/blend-stock';
 
 // GET - List products
@@ -76,27 +76,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Sản phẩm "${existing.name}" đã tồn tại (mã: ${existing.code})` }, { status: 400 });
     }
 
-    // Generate code
-    const lastProduct = await prisma.product.findFirst({
-      orderBy: { code: 'desc' },
-      select: { code: true },
-    });
-    const code = generateCode('SP', lastProduct?.code || null);
+    // Generate code + create inside transaction to prevent race condition
+    const product = await prisma.$transaction(async (tx) => {
+      const code = await generateCodeInTx(tx, 'SP', 'product');
 
-    const product = await prisma.product.create({
-      data: {
-        code,
-        name,
-        categoryId,
-        unit,
-
-        salePrice: parseFloat(salePrice) || 0,
-        minStock: parseFloat(minStock) || 0,
-        barcode: barcode || null,
-        linkedStockId: linkedStockId || null,
-        blendTemplateId: blendTemplateId || null,
-      },
-      include: { category: true },
+      return tx.product.create({
+        data: {
+          code,
+          name,
+          categoryId,
+          unit,
+          salePrice: parseFloat(salePrice) || 0,
+          minStock: parseFloat(minStock) || 0,
+          barcode: barcode || null,
+          linkedStockId: linkedStockId || null,
+          blendTemplateId: blendTemplateId || null,
+        },
+        include: { category: true },
+      });
     });
 
     return NextResponse.json(product, { status: 201 });

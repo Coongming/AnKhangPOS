@@ -35,23 +35,24 @@ export async function deductStockForProduct(
 
   // Case 1: Blend template — deduct ingredients proportionally
   if (product.blendTemplateId && product.blendTemplate && product.blendTemplate.items.length > 0) {
-    const totalTemplateQty = product.blendTemplate.items.reduce((sum, i) => sum + i.quantity, 0);
+    const totalTemplateQty = product.blendTemplate.items.reduce((sum, i) => sum + Number(i.quantity), 0);
     if (totalTemplateQty <= 0) return;
 
     for (const ingredient of product.blendTemplate.items) {
-      const ratio = ingredient.quantity / totalTemplateQty;
+      const ratio = Number(ingredient.quantity) / totalTemplateQty;
       const deductQty = quantity * ratio;
 
       const ingredientProduct = await tx.product.findUnique({ where: { id: ingredient.productId } });
       if (!ingredientProduct) continue;
 
-      if (!allowNegative && ingredientProduct.stock < deductQty) {
+      if (!allowNegative && Number(ingredientProduct.stock) < deductQty) {
         throw new Error(`Nguyên liệu "${ingredientProduct.name}" không đủ tồn kho (còn ${ingredientProduct.stock} ${ingredientProduct.unit}, cần ${deductQty.toFixed(2)})`);
       }
 
-      await tx.product.update({
+      const updatedIngredient = await tx.product.update({
         where: { id: ingredient.productId },
         data: { stock: { decrement: deductQty } },
+        select: { stock: true },
       });
 
       await tx.stockMovement.create({
@@ -59,7 +60,7 @@ export async function deductStockForProduct(
           productId: ingredient.productId,
           type: 'sale',
           quantity: -deductQty,
-          stockAfter: ingredientProduct.stock - deductQty,
+          stockAfter: updatedIngredient.stock,
           referenceId,
           notes: `${notePrefix} (${product.name} → ${ingredientProduct.name}, tỷ lệ ${(ratio * 100).toFixed(0)}%)`,
         },
@@ -75,13 +76,14 @@ export async function deductStockForProduct(
     : product;
   if (!stockProduct) return;
 
-  if (!allowNegative && stockProduct.stock < quantity) {
+  if (!allowNegative && Number(stockProduct.stock) < quantity) {
     throw new Error(`Sản phẩm "${product.name}" không đủ tồn kho (còn ${stockProduct.stock} ${stockProduct.unit})`);
   }
 
-  await tx.product.update({
+  const updatedStockProduct = await tx.product.update({
     where: { id: stockProductId },
     data: { stock: { decrement: quantity } },
+    select: { stock: true },
   });
 
   await tx.stockMovement.create({
@@ -89,7 +91,7 @@ export async function deductStockForProduct(
       productId: stockProductId,
       type: 'sale',
       quantity: -quantity,
-      stockAfter: stockProduct.stock - quantity,
+      stockAfter: updatedStockProduct.stock,
       referenceId,
       notes: `${notePrefix} (${product.linkedStockId ? product.name + ' → ' + stockProduct.name : product.name})`,
     },
@@ -123,19 +125,20 @@ export async function reverseStockForProduct(
 
   // Case 1: Blend template — reverse ingredients proportionally
   if (product.blendTemplateId && product.blendTemplate && product.blendTemplate.items.length > 0) {
-    const totalTemplateQty = product.blendTemplate.items.reduce((sum, i) => sum + i.quantity, 0);
+    const totalTemplateQty = product.blendTemplate.items.reduce((sum, i) => sum + Number(i.quantity), 0);
     if (totalTemplateQty <= 0) return;
 
     for (const ingredient of product.blendTemplate.items) {
-      const ratio = ingredient.quantity / totalTemplateQty;
+      const ratio = Number(ingredient.quantity) / totalTemplateQty;
       const reverseQty = quantity * ratio;
 
       const ingredientProduct = await tx.product.findUnique({ where: { id: ingredient.productId } });
       if (!ingredientProduct) continue;
 
-      await tx.product.update({
+      const updatedIngredient = await tx.product.update({
         where: { id: ingredient.productId },
         data: { stock: { increment: reverseQty } },
+        select: { stock: true },
       });
 
       await tx.stockMovement.create({
@@ -143,7 +146,7 @@ export async function reverseStockForProduct(
           productId: ingredient.productId,
           type: 'sale_cancel',
           quantity: reverseQty,
-          stockAfter: ingredientProduct.stock + reverseQty,
+          stockAfter: updatedIngredient.stock,
           referenceId,
           notes: `${notePrefix} (${product.name} → ${ingredientProduct.name}, tỷ lệ ${(ratio * 100).toFixed(0)}%)`,
         },
@@ -159,9 +162,10 @@ export async function reverseStockForProduct(
     : product;
   if (!stockProduct) return;
 
-  await tx.product.update({
+  const updatedStockProduct = await tx.product.update({
     where: { id: stockProductId },
     data: { stock: { increment: quantity } },
+    select: { stock: true },
   });
 
   await tx.stockMovement.create({
@@ -169,7 +173,7 @@ export async function reverseStockForProduct(
       productId: stockProductId,
       type: 'sale_cancel',
       quantity: quantity,
-      stockAfter: stockProduct.stock + quantity,
+      stockAfter: updatedStockProduct.stock,
       referenceId,
       notes: `${notePrefix} (${product.linkedStockId ? product.name + ' → ' + stockProduct.name : product.name})`,
     },
@@ -204,13 +208,13 @@ export async function checkStockForProduct(
 
   // Case 1: Blend template
   if (product.blendTemplateId && product.blendTemplate && product.blendTemplate.items.length > 0) {
-    const totalTemplateQty = product.blendTemplate.items.reduce((sum, i) => sum + i.quantity, 0);
+    const totalTemplateQty = product.blendTemplate.items.reduce((sum, i) => sum + Number(i.quantity), 0);
     if (totalTemplateQty <= 0) return;
 
     for (const ingredient of product.blendTemplate.items) {
-      const ratio = ingredient.quantity / totalTemplateQty;
+      const ratio = Number(ingredient.quantity) / totalTemplateQty;
       const needed = quantity * ratio;
-      if (ingredient.product.stock < needed) {
+      if (Number(ingredient.product.stock) < needed) {
         throw new Error(`Nguyên liệu "${ingredient.product.name}" không đủ tồn kho (còn ${ingredient.product.stock} ${ingredient.product.unit}, cần ${needed.toFixed(2)})`);
       }
     }
@@ -223,7 +227,7 @@ export async function checkStockForProduct(
     : product;
   if (!stockProduct) throw new Error('Sản phẩm liên kết kho không tồn tại');
 
-  if (stockProduct.stock < quantity) {
+  if (Number(stockProduct.stock) < quantity) {
     throw new Error(`Sản phẩm "${product.name}" không đủ tồn kho (còn ${stockProduct.stock} ${stockProduct.unit})`);
   }
 }

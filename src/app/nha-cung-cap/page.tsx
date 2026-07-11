@@ -10,6 +10,14 @@ interface Supplier {
   address: string | null; notes: string | null; debt: number; isActive: boolean;
 }
 
+const supplierDebtLabel = (amount: number) => (
+  amount < 0 ? `Ứng trước ${formatCurrency(Math.abs(amount))}` : formatCurrency(amount)
+);
+
+const supplierDebtColor = (amount: number) => (
+  amount > 0 ? 'var(--danger)' : amount < 0 ? 'var(--success)' : 'var(--text-primary)'
+);
+
 export default function SuppliersPage() {
   const { showToast } = useToast();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -88,7 +96,7 @@ export default function SuppliersPage() {
                   <td style={{ fontWeight: 600 }}>{s.name}</td>
                   <td>{s.phone || '—'}</td>
                   <td className="text-muted">{s.address || '—'}</td>
-                  <td className="text-right" style={{ fontWeight: 600, color: s.debt > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>{formatCurrency(s.debt)}</td>
+                  <td className="text-right" style={{ fontWeight: 600, color: supplierDebtColor(s.debt) }}>{supplierDebtLabel(s.debt)}</td>
                   <td><span className={`badge ${s.isActive ? 'badge-success' : 'badge-danger'}`}>{s.isActive ? 'Hoạt động' : 'Tạm ngừng'}</span></td>
                   <td className="text-center">
                     <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>

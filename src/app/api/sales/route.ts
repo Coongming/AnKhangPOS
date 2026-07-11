@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode } from '@/lib/utils';
+import { generateCode, generateCodeInTx } from '@/lib/utils';
 import { checkStockForProduct, deductStockForProduct, reverseStockForProduct } from '@/lib/stock-operations';
 import { recalcCustomerDebt } from '@/lib/debt-utils';
+import { validateNumber, validatePositiveNumber, isValidationError } from '@/lib/validation';
 
 // GET - List sales
 export async function GET(request: NextRequest) {
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
         deliveryEmployee: { select: { name: true, code: true } },
         items: { include: { product: { select: { name: true, code: true, unit: true } } } },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { saleDate: 'desc' },
     });
     return NextResponse.json(sales);
   } catch (error) {
@@ -56,12 +57,7 @@ export async function POST(request: NextRequest) {
 
     const isPending = status === 'pending';
 
-    // Generate sale code
-    const lastSale = await prisma.sale.findFirst({
-      orderBy: { code: 'desc' },
-      select: { code: true },
-    });
-    const code = generateCode('HD', lastSale?.code || null);
+    // Code generation moved inside transaction to prevent race condition
 
     // Check system setting for negative stock
     const allowNegStock = await prisma.systemSetting.findUnique({
@@ -70,6 +66,9 @@ export async function POST(request: NextRequest) {
     const allowNegative = allowNegStock?.value === 'true';
 
     const sale = await prisma.$transaction(async (tx) => {
+      // Generate sale code inside transaction to prevent race condition
+      const code = await generateCodeInTx(tx, 'HD', 'sale');
+
       // Pre-check stock (skip for pending)
       if (!isPending) {
         for (const item of items) {
@@ -83,19 +82,20 @@ export async function POST(request: NextRequest) {
       const processedItems = [];
 
       for (const item of items) {
-        const qty = parseFloat(item.quantity);
-        const price = parseFloat(item.unitPrice);
-        const itemDiscount = parseFloat(item.discount) || 0;
+        const qty = validatePositiveNumber(item.quantity, 'Số lượng');
+        const price = validatePositiveNumber(item.unitPrice, 'Đơn giá');
+        const itemDiscount = validateNumber(item.discount || 0, 'Chiết khấu');
         const lineTotal = qty * price - itemDiscount;
         const product = await tx.product.findUnique({ where: { id: item.productId } });
+        if (!product) throw new Error(`Sản phẩm không tồn tại: ${item.productId}`);
 
         subtotal += lineTotal;
-        totalCost += qty * (product?.costPrice || 0);
+        totalCost += qty * Number(product.costPrice);
         processedItems.push({
           productId: item.productId,
           quantity: qty,
           unitPrice: price,
-          costPrice: product?.costPrice || 0,
+          costPrice: product.costPrice,
           discount: itemDiscount,
           totalPrice: lineTotal,
         });
@@ -151,6 +151,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(sale, { status: 201 });
   } catch (error) {
     console.error('Sales POST error:', error);
+    if (isValidationError(error)) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const message = error instanceof Error ? error.message : 'Lỗi tạo hóa đơn';
     return NextResponse.json({ error: message }, { status: 500 });
   }
@@ -194,7 +197,7 @@ export async function PUT(request: NextRequest) {
       await prisma.$transaction(async (tx) => {
         // 1. REVERSE old stock
         for (const oldItem of sale.items) {
-          await reverseStockForProduct(tx, oldItem.productId, oldItem.quantity, id, `Sửa HĐ (hoàn kho) - ${sale.code}`);
+          await reverseStockForProduct(tx, oldItem.productId, Number(oldItem.quantity), id, `Sửa HĐ (hoàn kho) - ${sale.code}`);
         }
 
         // 2. Delete old items & related records (debt sẽ tính lại ở cuối)
@@ -219,7 +222,7 @@ export async function PUT(request: NextRequest) {
           await checkStockForProduct(tx, item.productId, qty, allowNegative);
 
           subtotal += lineTotal;
-          totalCost += qty * product.costPrice;
+          totalCost += qty * Number(product.costPrice);
           processedItems.push({
             productId: item.productId,
             quantity: qty,
@@ -298,11 +301,11 @@ export async function PUT(request: NextRequest) {
       await prisma.$transaction(async (tx) => {
         // Check stock
         for (const item of sale.items) {
-          await checkStockForProduct(tx, item.productId, item.quantity, allowNegative);
+          await checkStockForProduct(tx, item.productId, Number(item.quantity), allowNegative);
         }
 
         const paid = parseFloat(paidAmount) || 0;
-        const debtAmount = Math.max(0, sale.totalAmount - paid);
+        const debtAmount = Math.max(0, Number(sale.totalAmount) - paid);
 
         if (debtAmount > 0 && !sale.customerId) {
           throw new Error('Bán nợ phải chọn khách hàng');
@@ -322,7 +325,7 @@ export async function PUT(request: NextRequest) {
 
         // 2. Deduct stock
         for (const item of sale.items) {
-          await deductStockForProduct(tx, item.productId, item.quantity, id, `Bán hàng (hoàn thành đơn chờ) - ${sale.code}`, allowNegative);
+          await deductStockForProduct(tx, item.productId, Number(item.quantity), id, `Bán hàng (hoàn thành đơn chờ) - ${sale.code}`, allowNegative);
         }
 
         // 3. Customer debt — tính lại từ nguồn
@@ -383,7 +386,7 @@ export async function DELETE(request: NextRequest) {
       // Reverse stock if still active
       if (sale.status === 'completed') {
         for (const item of sale.items) {
-          await reverseStockForProduct(tx, item.productId, item.quantity, id, `Xóa hóa đơn - ${sale.code}`);
+          await reverseStockForProduct(tx, item.productId, Number(item.quantity), id, `Xóa hóa đơn - ${sale.code}`);
         }
       }
 

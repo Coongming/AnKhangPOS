@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       // Customer pays debt
       const customer = await prisma.customer.findUnique({ where: { id: entityId } });
       if (!customer) return NextResponse.json({ error: 'Không tìm thấy khách hàng' }, { status: 404 });
-      if (payAmount > customer.debt) return NextResponse.json({ error: 'Số tiền trả vượt quá công nợ' }, { status: 400 });
+      if (payAmount > Number(customer.debt)) return NextResponse.json({ error: 'Số tiền trả vượt quá công nợ' }, { status: 400 });
 
       await prisma.$transaction(async (tx) => {
         await tx.debtTransaction.create({
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
             type: 'customer_payment',
             customerId: entityId,
             amount: -payAmount,
-            balanceAfter: customer.debt - payAmount,
+            balanceAfter: Number(customer.debt) - payAmount,
             notes: notes || 'Khách trả nợ',
           },
         });
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
       // Pay supplier
       const supplier = await prisma.supplier.findUnique({ where: { id: entityId } });
       if (!supplier) return NextResponse.json({ error: 'Không tìm thấy nhà cung cấp' }, { status: 404 });
-      if (payAmount > supplier.debt) return NextResponse.json({ error: 'Số tiền trả vượt quá công nợ' }, { status: 400 });
+      if (payAmount > Number(supplier.debt)) return NextResponse.json({ error: 'Số tiền trả vượt quá công nợ' }, { status: 400 });
 
       await prisma.$transaction(async (tx) => {
         await tx.debtTransaction.create({
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
             type: 'supplier_payment',
             supplierId: entityId,
             amount: -payAmount,
-            balanceAfter: supplier.debt - payAmount,
+            balanceAfter: Number(supplier.debt) - payAmount,
             notes: notes || 'Trả nợ nhà cung cấp',
           },
         });

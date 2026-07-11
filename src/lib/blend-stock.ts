@@ -6,7 +6,7 @@ import { prisma } from '@/lib/prisma';
  * Mutates the products array in-place, setting the `stock` field.
  */
 export async function applyBlendVirtualStock(
-  products: Array<{ id: string; stock: number; blendTemplateId?: string | null; linkedStockId?: string | null }>
+  products: Array<{ id: string; stock: number | { toNumber?: () => number }; blendTemplateId?: string | null; linkedStockId?: string | null }>
 ) {
   const blendProducts = products.filter((p) => p.blendTemplateId);
   if (blendProducts.length === 0) return;
@@ -33,7 +33,7 @@ export async function applyBlendVirtualStock(
       continue;
     }
 
-    const totalTemplateQty = template.items.reduce((sum, i) => sum + i.quantity, 0);
+    const totalTemplateQty = template.items.reduce((sum, i) => sum + Number(i.quantity), 0);
     if (totalTemplateQty <= 0) {
       product.stock = 0;
       continue;
@@ -44,9 +44,9 @@ export async function applyBlendVirtualStock(
     // Virtual stock = min of all these
     let minOutput = Infinity;
     for (const item of template.items) {
-      if (item.quantity <= 0) continue;
-      const ratio = item.quantity / totalTemplateQty;
-      const possibleOutput = item.product.stock / ratio;
+      if (Number(item.quantity) <= 0) continue;
+      const ratio = Number(item.quantity) / totalTemplateQty;
+      const possibleOutput = Number(item.product.stock) / ratio;
       minOutput = Math.min(minOutput, possibleOutput);
     }
 

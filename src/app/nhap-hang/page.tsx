@@ -16,6 +16,14 @@ interface Purchase {
   items: Array<{ productId: string; quantity: number; unitPrice: number; totalPrice: number; product: { name: string; code: string; unit: string } }>;
 }
 
+const supplierDebtLabel = (amount: number) => (
+  amount < 0 ? `Ứng trước ${formatCurrency(Math.abs(amount))}` : formatCurrency(amount)
+);
+
+const supplierDebtColor = (amount: number) => (
+  amount > 0 ? 'var(--danger)' : amount < 0 ? 'var(--success)' : 'var(--text-muted)'
+);
+
 export default function PurchasesPage() {
   const { showToast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
@@ -70,7 +78,8 @@ export default function PurchasesPage() {
   const removeFromCart = (index: number) => setCart(cart.filter((_, i) => i !== index));
 
   const totalAmount = cart.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0) * (parseFloat(item.unitPrice) || 0), 0);
-  const debtAmount = totalAmount - (parseFloat(paidAmount) || 0);
+  const paidValue = parseFloat(paidAmount) || 0;
+  const debtAmount = totalAmount - paidValue;
 
   const handleSubmit = async () => {
     if (!selectedSupplier) { showToast('error', 'Chọn NCC'); return; }
@@ -80,6 +89,7 @@ export default function PurchasesPage() {
         showToast('error', `Nhập SL và giá cho "${item.name}"`); return;
       }
     }
+    if (paidValue < 0) { showToast('error', 'Số tiền trả không hợp lệ'); return; }
     try {
       const res = await fetch('/api/purchases', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -141,7 +151,8 @@ export default function PurchasesPage() {
   const removeEditItem = (index: number) => setEditItems(editItems.filter((_, i) => i !== index));
 
   const editTotal = editItems.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0) * (parseFloat(item.unitPrice) || 0), 0);
-  const editDebt = Math.max(0, editTotal - (parseFloat(editPaidAmount) || 0));
+  const editPaidValue = parseFloat(editPaidAmount) || 0;
+  const editDebt = editTotal - editPaidValue;
 
   const handleEdit = async () => {
     if (!editPurchase) return;
@@ -151,6 +162,7 @@ export default function PurchasesPage() {
         showToast('error', `Nhập SL và giá cho "${item.name}"`); return;
       }
     }
+    if (editPaidValue < 0) { showToast('error', 'Số tiền trả không hợp lệ'); return; }
     try {
       const res = await fetch('/api/purchases', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -178,6 +190,13 @@ export default function PurchasesPage() {
     searchProduct && (p.name.toLowerCase().includes(searchProduct.toLowerCase()) || p.code.toLowerCase().includes(searchProduct.toLowerCase()))
   );
 
+  const filteredPurchases = purchases
+    .filter(p => (!filterSupplier || p.supplierId === filterSupplier))
+    .sort((a, b) => {
+      const dateDiff = new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime();
+      return dateDiff || b.code.localeCompare(a.code, 'vi');
+    });
+
   if (loading) return <div className="loading-page"><div className="loading-spinner" /></div>;
 
   return (
@@ -203,25 +222,25 @@ export default function PurchasesPage() {
               </select>
             </div>
             <div className="toolbar-right">
-              <button className="btn btn-primary" onClick={() => setShowForm(true)}><Plus size={16} /> Tạo phiếu nhập</button>
+              <button className="btn btn-primary" onClick={() => { setShowForm(true); }}><Plus size={16} /> Phiếu nhập</button>
             </div>
           </div>
 
-          {purchases.filter(p => !filterSupplier || p.supplierId === filterSupplier).length === 0 ? (
-            <div className="card"><div className="empty-state"><ClipboardList /><h3>Chưa có phiếu nhập</h3></div></div>
+          {filteredPurchases.length === 0 ? (
+            <div className="card"><div className="empty-state"><ClipboardList /><h3>Chưa có phiếu</h3></div></div>
           ) : (
             <div className="table-wrapper">
               <table className="table">
-                <thead><tr><th>Mã</th><th>Ngày</th><th>NCC</th><th className="text-right">Tổng tiền</th><th className="text-right">Đã trả</th><th className="text-right">Còn nợ</th><th>Trạng thái</th><th className="text-center">Thao tác</th></tr></thead>
+                <thead><tr><th>Mã</th><th>Ngày</th><th>NCC</th><th className="text-right">Tổng tiền</th><th className="text-right">Đã trả</th><th className="text-right">Công nợ</th><th>Trạng thái</th><th className="text-center">Thao tác</th></tr></thead>
                 <tbody>
-                  {purchases.filter(p => !filterSupplier || p.supplierId === filterSupplier).map(p => (
+                  {filteredPurchases.map(p => (
                     <tr key={p.id} style={{ opacity: p.status === 'cancelled' ? 0.5 : 1 }}>
                       <td style={{ fontWeight: 600, color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setViewPurchase(p)}>{p.code}</td>
                       <td>{formatDate(p.purchaseDate)}</td>
                       <td>{p.supplier.name}</td>
                       <td className="text-right font-bold">{formatCurrency(p.totalAmount)}</td>
                       <td className="text-right text-success">{formatCurrency(p.paidAmount)}</td>
-                      <td className="text-right" style={{ color: p.debtAmount > 0 ? 'var(--danger)' : 'var(--text-muted)', fontWeight: p.debtAmount > 0 ? 700 : 400 }}>{formatCurrency(p.debtAmount)}</td>
+                      <td className="text-right" style={{ color: supplierDebtColor(p.debtAmount), fontWeight: p.debtAmount !== 0 ? 700 : 400 }}>{supplierDebtLabel(p.debtAmount)}</td>
                       <td><span className={`badge ${p.status === 'completed' ? 'badge-success' : 'badge-danger'}`}>{p.status === 'completed' ? 'Hoàn thành' : 'Đã hủy'}</span></td>
                       <td className="text-center">
                         <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
@@ -242,7 +261,7 @@ export default function PurchasesPage() {
         /* Purchase Form */
         <div className="card">
           <div className="card-header">
-            <h3 className="card-title">Tạo phiếu nhập mới</h3>
+            <h3 className="card-title">📦 Tạo phiếu nhập mới</h3>
             <button className="btn btn-ghost" onClick={() => { setShowForm(false); setCart([]); }}>Hủy</button>
           </div>
           <div className="form-row form-row-3" style={{ marginBottom: 16 }}>
@@ -303,11 +322,18 @@ export default function PurchasesPage() {
               </div>
               <div className="form-group">
                 <label className="form-label">Số tiền trả</label>
-                <input className="form-input" type="number" min="0" value={paidAmount} onChange={e => setPaidAmount(e.target.value)} placeholder="0" />
+                <input
+                  className="form-input"
+                  type="number"
+                  min="0"
+                  value={paidAmount}
+                  onChange={e => setPaidAmount(e.target.value)}
+                  placeholder="0"
+                />
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, padding: '8px 0', borderTop: '1px solid var(--border-color)' }}>
-                <span>Còn nợ NCC:</span>
-                <span style={{ fontSize: 16, fontWeight: 700, color: debtAmount > 0 ? 'var(--danger)' : 'var(--success)' }}>{formatCurrency(Math.max(0, debtAmount))}</span>
+                <span>{debtAmount < 0 ? 'Ứng trước NCC:' : 'Còn nợ NCC:'}</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: supplierDebtColor(debtAmount) }}>{supplierDebtLabel(debtAmount)}</span>
               </div>
               <button className="btn btn-success btn-lg w-full" onClick={handleSubmit} disabled={cart.length === 0}>
                 <Save size={18} /> Lưu phiếu nhập
@@ -341,7 +367,9 @@ export default function PurchasesPage() {
               <div style={{ marginTop: 16, textAlign: 'right' }}>
                 <div>Tổng: <strong>{formatCurrency(viewPurchase.totalAmount)}</strong></div>
                 <div className="text-success">Đã trả: <strong>{formatCurrency(viewPurchase.paidAmount)}</strong></div>
-                <div className="text-danger">Còn nợ: <strong>{formatCurrency(viewPurchase.debtAmount)}</strong></div>
+                <div style={{ color: supplierDebtColor(viewPurchase.debtAmount) }}>
+                  {viewPurchase.debtAmount < 0 ? 'Ứng trước' : 'Còn nợ'}: <strong>{supplierDebtLabel(viewPurchase.debtAmount)}</strong>
+                </div>
               </div>
               {viewPurchase.notes && <div style={{ marginTop: 12 }} className="text-muted">Ghi chú: {viewPurchase.notes}</div>}
             </div>
@@ -412,10 +440,16 @@ export default function PurchasesPage() {
                   </div>
                   <div className="form-group" style={{ marginBottom: 8 }}>
                     <label className="form-label" style={{ fontSize: 12 }}>Số tiền trả</label>
-                    <input className="form-input" type="number" min="0" value={editPaidAmount} onChange={e => setEditPaidAmount(e.target.value)} />
+                    <input
+                      className="form-input"
+                      type="number"
+                      min="0"
+                      value={editPaidAmount}
+                      onChange={e => setEditPaidAmount(e.target.value)}
+                    />
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', color: editDebt > 0 ? 'var(--danger)' : 'var(--text-muted)' }}>
-                    <span>Còn nợ NCC:</span><strong>{formatCurrency(editDebt)}</strong>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: supplierDebtColor(editDebt) }}>
+                    <span>{editDebt < 0 ? 'Ứng trước NCC:' : 'Còn nợ NCC:'}</span><strong>{supplierDebtLabel(editDebt)}</strong>
                   </div>
                 </div>
               </div>

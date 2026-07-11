@@ -17,9 +17,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const { name } = await request.json();
+    const { name, type } = await request.json();
     if (!name?.trim()) return NextResponse.json({ error: 'Vui lòng nhập tên danh mục' }, { status: 400 });
-    const category = await prisma.expenseCategory.create({ data: { name: name.trim() } });
+    const category = await prisma.expenseCategory.create({ data: { name: name.trim(), type: type || 'operating' } });
     return NextResponse.json(category, { status: 201 });
   } catch (error) {
     console.error('Expense categories POST error:', error);
@@ -29,11 +29,13 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const { id, name } = await request.json();
+    const { id, name, type } = await request.json();
     if (!id || !name?.trim()) return NextResponse.json({ error: 'Thiếu thông tin' }, { status: 400 });
+    const data: Record<string, string> = { name: name.trim() };
+    if (type) data.type = type;
     const category = await prisma.expenseCategory.update({
       where: { id },
-      data: { name: name.trim() },
+      data,
     });
     return NextResponse.json(category);
   } catch (error) {

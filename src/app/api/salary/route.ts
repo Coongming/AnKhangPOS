@@ -46,8 +46,8 @@ export async function GET(request: NextRequest) {
             date: { gte: startDate, lte: endDate },
           },
         });
-        totalHours = shifts.reduce((sum, s) => sum + s.hours, 0);
-        hourlyPay = totalHours * employee.hourlyRate;
+        totalHours = shifts.reduce((sum, s) => sum + Number(s.hours), 0);
+        hourlyPay = totalHours * Number(employee.hourlyRate);
       }
 
       // 2. Delivery pay - count bottles delivered × employee rate
@@ -74,12 +74,12 @@ export async function GET(request: NextRequest) {
         for (const sale of sales) {
           for (const item of sale.items) {
             if (item.product.unit.toLowerCase() === 'bình') {
-              totalBottles += item.quantity;
+              totalBottles += Number(item.quantity);
             }
           }
         }
 
-        deliveryPay = totalBottles * employee.deliveryRate;
+        deliveryPay = totalBottles * Number(employee.deliveryRate);
       }
 
       // 3. Already paid advances in this period
@@ -91,7 +91,7 @@ export async function GET(request: NextRequest) {
           periodEnd: { lte: endDate },
         },
       });
-      const totalAdvanced = advances.reduce((sum, a) => sum + a.totalPay, 0);
+      const totalAdvanced = advances.reduce((sum, a) => sum + Number(a.totalPay), 0);
 
       return NextResponse.json({
         employee,

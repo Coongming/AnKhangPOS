@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode } from '@/lib/utils';
+import { generateCode, generateCodeInTx } from '@/lib/utils';
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,10 +36,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Khách hàng trùng ${match}: "${existing.name}" (mã: ${existing.code})` }, { status: 400 });
     }
 
-    const last = await prisma.customer.findFirst({ orderBy: { code: 'desc' }, select: { code: true } });
-    const code = generateCode('KH', last?.code || null, 3);
-    const customer = await prisma.customer.create({
-      data: { code, name: body.name, phone: body.phone || null, address: body.address || null, notes: body.notes || null },
+    const customer = await prisma.$transaction(async (tx) => {
+      const code = await generateCodeInTx(tx, 'KH', 'customer', 3);
+      return tx.customer.create({
+        data: { code, name: body.name, phone: body.phone || null, address: body.address || null, notes: body.notes || null },
+      });
     });
     return NextResponse.json(customer, { status: 201 });
   } catch (error) {
