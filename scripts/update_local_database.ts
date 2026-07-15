@@ -126,8 +126,16 @@ async function main() {
     throw new Error('Thiếu LOCAL_DATABASE_URL trong .env');
   }
 
+  // Lọc bỏ biến hệ thống ẩn của Windows (tên chứa '=') để tránh lỗi EINVAL
+  const cleanEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key && !key.startsWith('=') && value !== undefined) {
+      cleanEnv[key] = value;
+    }
+  }
+
   const localEnv = {
-    ...process.env,
+    ...cleanEnv,
     DATABASE_URL: localDatabaseUrl,
     DIRECT_URL: localDirectUrl || localDatabaseUrl,
   };
