@@ -86,7 +86,7 @@ function createBackup(localDatabaseUrl: string): string {
   fs.mkdirSync(backupDir, { recursive: true });
 
   const backupFile = path.join(backupDir, `local-db-before-update-${makeTimestamp()}.dump`);
-  const result = spawnSync(commandName('pg_dump'), [localDatabaseUrl, '--format=custom', '--file', backupFile], {
+  const result = spawnSync(commandName('pg_dump'), ['-d', localDatabaseUrl, '--format=custom', '--file', backupFile], {
     cwd: ROOT_DIR,
     stdio: 'inherit',
   });

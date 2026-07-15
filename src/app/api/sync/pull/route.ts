@@ -101,9 +101,10 @@ export async function POST() {
     const tables = await getLocalTables(localUrl);
     if (tables.length === 0) throw new Error('Không tìm thấy bảng local nào để khôi phục');
 
-    await execFileAsync('pg_dump', [localUrl, '--format=custom', '--file', backupFile]);
+    await execFileAsync('pg_dump', ['-d', localUrl, '--format=custom', '--file', backupFile]);
 
     await execFileAsync('pg_dump', [
+      '-d',
       onlineUrl,
       '--data-only',
       '--no-owner',

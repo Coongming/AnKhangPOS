@@ -96,7 +96,7 @@ function createBackup(localDatabaseUrl: string): string {
   fs.mkdirSync(backupDir, { recursive: true });
 
   const backupFile = path.join(backupDir, `local-db-before-online-pull-${makeTimestamp()}.dump`);
-  runCommand('pg_dump', [localDatabaseUrl, '--format=custom', '--file', backupFile]);
+  runCommand('pg_dump', ['-d', localDatabaseUrl, '--format=custom', '--file', backupFile]);
   return backupFile;
 }
 
@@ -165,6 +165,7 @@ async function main() {
   try {
     console.log('\nDumping online data...');
     runCommand('pg_dump', [
+      '-d',
       onlineDatabaseUrl,
       '--data-only',
       '--no-owner',
