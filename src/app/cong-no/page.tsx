@@ -7,7 +7,7 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 
 interface Customer { id: string; code: string; name: string; debt: number; phone: string | null; }
 interface Supplier { id: string; code: string; name: string; debt: number; phone: string | null; }
-interface DebtTransaction { id: string; type: string; amount: number; balanceAfter: number; notes: string | null; createdAt: string; customer?: { name: string } | null; supplier?: { name: string } | null; }
+interface DebtTransaction { id: string; type: string; amount: number; balanceAfter: number; notes: string | null; paymentMethod: string | null; createdAt: string; customer?: { name: string } | null; supplier?: { name: string } | null; }
 
 const supplierDebtLabel = (amount: number) => (
   amount < 0 ? `Ứng trước ${formatCurrency(Math.abs(amount))}` : formatCurrency(amount)
@@ -28,6 +28,7 @@ export default function DebtPage() {
   const [payTarget, setPayTarget] = useState<{ id: string; name: string; debt: number; type: 'customer_payment' | 'supplier_payment' } | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payNotes, setPayNotes] = useState('');
+  const [payMethod, setPayMethod] = useState<'cash' | 'transfer'>('cash');
 
   const fetchData = useCallback(async () => {
     try {
@@ -49,6 +50,7 @@ export default function DebtPage() {
     setPayTarget({ id, name, debt, type });
     setPayAmount('');
     setPayNotes('');
+    setPayMethod('cash');
     setShowPayModal(true);
   };
 
@@ -58,7 +60,7 @@ export default function DebtPage() {
       const res = await fetch('/api/debts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: payTarget.type, entityId: payTarget.id, amount: payAmount, notes: payNotes }),
+        body: JSON.stringify({ type: payTarget.type, entityId: payTarget.id, amount: payAmount, notes: payNotes, paymentMethod: payMethod }),
       });
       if (!res.ok) throw new Error((await res.json()).error);
       showToast('success', 'Đã ghi nhận thanh toán');
@@ -191,6 +193,27 @@ export default function DebtPage() {
                 <label className="form-label">Số tiền thanh toán *</label>
                 <input className="form-input" type="number" min="0" max={payTarget.debt} value={payAmount} onChange={(e) => setPayAmount(e.target.value)} autoFocus />
                 <button className="btn btn-ghost btn-sm mt-1" onClick={() => setPayAmount(String(payTarget.debt))}>Trả hết</button>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Phương thức thanh toán *</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className={`btn ${payMethod === 'cash' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setPayMethod('cash')}
+                  >
+                    💵 Tiền mặt
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${payMethod === 'transfer' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setPayMethod('transfer')}
+                  >
+                    🏦 Chuyển khoản
+                  </button>
+                </div>
               </div>
               <div className="form-group">
                 <label className="form-label">Ghi chú</label>

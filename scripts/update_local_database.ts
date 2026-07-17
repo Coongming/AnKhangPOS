@@ -51,11 +51,12 @@ function commandName(command: string): string {
   return command;
 }
 
-function runCommand(command: string, args: string[], env: NodeJS.ProcessEnv): void {
+function runCommand(command: string, args: string[], env: Record<string, string | undefined>): void {
   const result = spawnSync(commandName(command), args, {
     cwd: ROOT_DIR,
-    env,
+    env: env as NodeJS.ProcessEnv,
     stdio: 'inherit',
+    shell: true,
   });
 
   if (result.error) {
@@ -89,6 +90,7 @@ function createBackup(localDatabaseUrl: string): string {
   const result = spawnSync(commandName('pg_dump'), ['-d', localDatabaseUrl, '--format=custom', '--file', backupFile], {
     cwd: ROOT_DIR,
     stdio: 'inherit',
+    shell: true,
   });
 
   if (result.error) {
@@ -138,7 +140,7 @@ async function main() {
     ...cleanEnv,
     DATABASE_URL: localDatabaseUrl,
     DIRECT_URL: localDirectUrl || localDatabaseUrl,
-  };
+  } as Record<string, string>;
 
   console.log('=== Local database update ===');
   console.log(`Database: ${localDatabaseUrl.replace(/:[^:@/]+@/, ':***@')}`);

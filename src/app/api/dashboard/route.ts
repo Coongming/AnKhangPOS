@@ -20,8 +20,9 @@ export async function GET() {
 
     const todayRevenue = todaySales.reduce((sum, s) => sum + Number(s.totalAmount), 0);
     const todayOrders = todaySales.length;
-    const todayCashRevenue = todaySales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.totalAmount), 0);
-    const todayTransferRevenue = todaySales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + Number(s.totalAmount), 0);
+    const todayCashRevenue = todaySales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.paidAmount), 0);
+    const todayTransferRevenue = todaySales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + Number(s.paidAmount), 0);
+    const todayDebtRevenue = todaySales.reduce((sum, s) => sum + Number(s.debtAmount), 0);
 
     // Debt totals
     const customerDebtAgg = await prisma.customer.aggregate({
@@ -83,6 +84,7 @@ export async function GET() {
       todayOrders,
       todayCashRevenue,
       todayTransferRevenue,
+      todayDebtRevenue,
       totalCustomerDebt: customerDebtAgg._sum.debt || 0,
       totalSupplierDebt: supplierDebtAgg._sum.debt || 0,
       lowStockCount: lowStockProducts.length,

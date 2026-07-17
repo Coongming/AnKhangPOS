@@ -210,6 +210,7 @@ model DebtTransaction {
   amount      Decimal   @db.Decimal(15, 0) // Số tiền (dương = phát sinh nợ, âm = trả nợ)
   balanceAfter Decimal  @map("balance_after") @db.Decimal(15, 0) // Số dư sau giao dịch
   notes       String?
+  paymentMethod String? @map("payment_method") // cash, transfer
   createdAt   DateTime  @default(now()) @map("created_at")
 
   customer    Customer? @relation(fields: [customerId], references: [id])

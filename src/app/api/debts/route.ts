@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { type, entityId, amount, notes } = body;
+    const { type, entityId, amount, notes, paymentMethod } = body;
 
     if (!entityId || !amount || parseFloat(amount) <= 0) {
       return NextResponse.json({ error: 'Vui lòng nhập đầy đủ thông tin' }, { status: 400 });
@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
             amount: -payAmount,
             balanceAfter: Number(customer.debt) - payAmount,
             notes: notes || 'Khách trả nợ',
+            paymentMethod: paymentMethod || null,
           },
         });
 
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest) {
             amount: -payAmount,
             balanceAfter: Number(supplier.debt) - payAmount,
             notes: notes || 'Trả nợ nhà cung cấp',
+            paymentMethod: paymentMethod || null,
           },
         });
 

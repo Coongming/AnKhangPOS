@@ -32,6 +32,7 @@ interface DashboardData {
   todayOrders: number;
   todayCashRevenue: number;
   todayTransferRevenue: number;
+  todayDebtRevenue: number;
   totalCustomerDebt: number;
   totalSupplierDebt: number;
   lowStockCount: number;
@@ -200,7 +201,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat Cards */}
-      <div className="card-grid card-grid-3" style={{ marginBottom: 24 }}>
+      <div className="card-grid card-grid-4" style={{ marginBottom: 24 }}>
         <div className="stat-card">
           <div className="stat-icon accent">
             <TrendingUp size={22} />
@@ -231,6 +232,17 @@ export default function DashboardPage() {
             <h3>Chuyển khoản hôm nay</h3>
             <div className="stat-value">{formatCurrency(data.todayTransferRevenue)}</div>
             <div className="stat-sub">🏦 Transfer</div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
+            <Wallet size={22} />
+          </div>
+          <div className="stat-content">
+            <h3>Nợ hôm nay</h3>
+            <div className="stat-value" style={{ color: data.todayDebtRevenue > 0 ? 'var(--danger)' : undefined }}>{formatCurrency(data.todayDebtRevenue)}</div>
+            <div className="stat-sub">📋 Bán nợ</div>
           </div>
         </div>
       </div>
