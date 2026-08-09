@@ -144,12 +144,7 @@ export async function GET(request: NextRequest) {
       const totalCapitalDeposits = capitalDeposits.reduce((sum, e) => sum + Number(e.amount), 0);
 
       // === TIỀN RA ===
-      // Trả NCC
-      const purchases = await prisma.purchase.findMany({
-        where: { purchaseDate: { gte: startDate, lt: endDate }, status: 'completed' },
-      });
-      const totalPaidToSuppliers = purchases.reduce((sum, p) => sum + Number(p.paidAmount), 0);
-
+      // Trả NCC: mọi khoản tiền thực chi đều nằm trong sổ thanh toán độc lập.
       const supplierPayments = await prisma.debtTransaction.findMany({
         where: { type: 'supplier_payment', createdAt: { gte: startDate, lt: endDate } },
       });
@@ -184,7 +179,7 @@ export async function GET(request: NextRequest) {
 
 
       const totalIn = cashSales + transferSales + totalCustomerPayments + totalCapitalDeposits;
-      const totalOut = totalPaidToSuppliers + totalSupplierPayments + totalOperatingExpenses + totalCashflowOut + totalSalary;
+      const totalOut = totalSupplierPayments + totalOperatingExpenses + totalCashflowOut + totalSalary;
 
       // Chi tiết chi phí vận hành theo danh mục
       const opExpByCategory: Record<string, number> = {};
@@ -209,7 +204,7 @@ export async function GET(request: NextRequest) {
           total: totalIn,
         },
         moneyOut: {
-          supplierPayments: totalPaidToSuppliers + totalSupplierPayments,
+          supplierPayments: totalSupplierPayments,
           operatingExpenses: totalOperatingExpenses,
           cashflowOut: totalCashflowOut,
           salary: totalSalary,

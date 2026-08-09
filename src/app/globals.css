@@ -104,6 +104,12 @@ a {
   transition: transform var(--transition-normal);
 }
 
+.hamburger-btn,
+.sidebar-mobile,
+.mobile-close-btn {
+  display: none !important;
+}
+
 .sidebar::-webkit-scrollbar {
   width: 4px;
 }
@@ -226,6 +232,7 @@ a {
 .main-content {
   margin-left: var(--sidebar-width);
   flex: 1;
+  min-width: 0;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -253,6 +260,8 @@ a {
 
 .main-body {
   flex: 1;
+  min-width: 0;
+  width: 100%;
   padding: 24px;
 }
 
@@ -1370,6 +1379,16 @@ input[type="number"] {
 }
 
 @media (max-width: 768px) {
+  .hamburger-btn,
+  .sidebar-mobile,
+  .mobile-close-btn {
+    display: flex !important;
+  }
+
+  .sidebar-desktop {
+    display: none !important;
+  }
+
   .sidebar {
     transform: translateX(-100%);
   }
@@ -1380,6 +1399,10 @@ input[type="number"] {
   
   .main-content {
     margin-left: 0;
+  }
+
+  .main-body {
+    padding: 64px 12px 16px;
   }
   
   .card-grid-4,

@@ -11,6 +11,7 @@ export async function GET() {
     // Fetch toàn bộ dữ liệu từ DB thông qua Prisma
     const [
       systemSettings,
+      codeSequences,
       categories,
       products,
       blendTemplates,
@@ -32,6 +33,7 @@ export async function GET() {
       salaryPayments,
     ] = await Promise.all([
       prisma.systemSetting.findMany(),
+      prisma.codeSequence.findMany(),
       prisma.productCategory.findMany(),
       prisma.product.findMany(),
       prisma.blendTemplate.findMany(),
@@ -45,7 +47,7 @@ export async function GET() {
       prisma.purchase.findMany(),
       prisma.purchaseItem.findMany(),
       prisma.debtTransaction.findMany(),
-      prisma.stockMovement.findMany(),
+      prisma.stockMovement.findMany({ orderBy: { ledgerSequence: 'asc' } }),
       prisma.expenseCategory.findMany(),
       prisma.expense.findMany(),
       prisma.employee.findMany(),
@@ -54,10 +56,11 @@ export async function GET() {
     ]);
 
     const backupData = {
-      version: '1.1',
+      version: '1.3',
       timestamp: new Date().toISOString(),
       data: {
         systemSettings,
+        codeSequences,
         categories,
         products,
         blendTemplates,

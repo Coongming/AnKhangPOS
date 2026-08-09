@@ -121,7 +121,7 @@ export default function SettingsPage() {
 
                 {/* Sample content */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, fontSize: 11 }}>
-                  <div><div style={{ fontWeight: 700, fontSize: 13 }}>#HD0001</div><div style={{ color: '#666' }}>💵 Tiền mặt</div></div>
+                  <div><div style={{ fontWeight: 700, fontSize: 13 }}>#HD000001</div><div style={{ color: '#666' }}>💵 Tiền mặt</div></div>
                   <div style={{ textAlign: 'right' }}><div style={{ fontWeight: 600 }}>03/07/2026</div><div style={{ color: '#666' }}>07:00</div></div>
                 </div>
 

@@ -1,4 +1,9 @@
 import { PrismaClient } from '@prisma/client';
+import {
+  applyStockMovement,
+  StockOperationContext,
+} from '@/lib/stock-ledger';
+import { ValidationError } from '@/lib/validation';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TxClient = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0];
@@ -17,7 +22,8 @@ export async function deductStockForProduct(
   quantity: number,
   referenceId: string,
   notePrefix: string,
-  allowNegative: boolean
+  allowNegative: boolean,
+  context: StockOperationContext
 ): Promise<void> {
   const product = await tx.product.findUnique({
     where: { id: productId },
@@ -49,21 +55,13 @@ export async function deductStockForProduct(
         throw new Error(`Nguyên liệu "${ingredientProduct.name}" không đủ tồn kho (còn ${ingredientProduct.stock} ${ingredientProduct.unit}, cần ${deductQty.toFixed(2)})`);
       }
 
-      const updatedIngredient = await tx.product.update({
-        where: { id: ingredient.productId },
-        data: { stock: { decrement: deductQty } },
-        select: { stock: true },
-      });
-
-      await tx.stockMovement.create({
-        data: {
-          productId: ingredient.productId,
-          type: 'sale',
-          quantity: -deductQty,
-          stockAfter: updatedIngredient.stock,
-          referenceId,
-          notes: `${notePrefix} (${product.name} → ${ingredientProduct.name}, tỷ lệ ${(ratio * 100).toFixed(0)}%)`,
-        },
+      await applyStockMovement(tx, {
+        ...context,
+        productId: ingredient.productId,
+        type: 'sale',
+        quantity: -deductQty,
+        referenceId,
+        notes: `${notePrefix} (${product.name} → ${ingredientProduct.name}, tỷ lệ ${(ratio * 100).toFixed(0)}%)`,
       });
     }
     return;
@@ -80,103 +78,13 @@ export async function deductStockForProduct(
     throw new Error(`Sản phẩm "${product.name}" không đủ tồn kho (còn ${stockProduct.stock} ${stockProduct.unit})`);
   }
 
-  const updatedStockProduct = await tx.product.update({
-    where: { id: stockProductId },
-    data: { stock: { decrement: quantity } },
-    select: { stock: true },
-  });
-
-  await tx.stockMovement.create({
-    data: {
-      productId: stockProductId,
-      type: 'sale',
-      quantity: -quantity,
-      stockAfter: updatedStockProduct.stock,
-      referenceId,
-      notes: `${notePrefix} (${product.linkedStockId ? product.name + ' → ' + stockProduct.name : product.name})`,
-    },
-  });
-}
-
-/**
- * Reverse stock deduction for a product (used in cancel/delete/edit).
- * Mirrors deductStockForProduct but adds stock back.
- */
-export async function reverseStockForProduct(
-  tx: TxClient,
-  productId: string,
-  quantity: number,
-  referenceId: string,
-  notePrefix: string
-): Promise<void> {
-  const product = await tx.product.findUnique({
-    where: { id: productId },
-    include: {
-      blendTemplate: {
-        include: {
-          items: {
-            include: { product: true },
-          },
-        },
-      },
-    },
-  });
-  if (!product) return;
-
-  // Case 1: Blend template — reverse ingredients proportionally
-  if (product.blendTemplateId && product.blendTemplate && product.blendTemplate.items.length > 0) {
-    const totalTemplateQty = product.blendTemplate.items.reduce((sum, i) => sum + Number(i.quantity), 0);
-    if (totalTemplateQty <= 0) return;
-
-    for (const ingredient of product.blendTemplate.items) {
-      const ratio = Number(ingredient.quantity) / totalTemplateQty;
-      const reverseQty = quantity * ratio;
-
-      const ingredientProduct = await tx.product.findUnique({ where: { id: ingredient.productId } });
-      if (!ingredientProduct) continue;
-
-      const updatedIngredient = await tx.product.update({
-        where: { id: ingredient.productId },
-        data: { stock: { increment: reverseQty } },
-        select: { stock: true },
-      });
-
-      await tx.stockMovement.create({
-        data: {
-          productId: ingredient.productId,
-          type: 'sale_cancel',
-          quantity: reverseQty,
-          stockAfter: updatedIngredient.stock,
-          referenceId,
-          notes: `${notePrefix} (${product.name} → ${ingredientProduct.name}, tỷ lệ ${(ratio * 100).toFixed(0)}%)`,
-        },
-      });
-    }
-    return;
-  }
-
-  // Case 2: Linked stock — reverse from linked product
-  const stockProductId = product.linkedStockId || productId;
-  const stockProduct = product.linkedStockId
-    ? await tx.product.findUnique({ where: { id: product.linkedStockId } })
-    : product;
-  if (!stockProduct) return;
-
-  const updatedStockProduct = await tx.product.update({
-    where: { id: stockProductId },
-    data: { stock: { increment: quantity } },
-    select: { stock: true },
-  });
-
-  await tx.stockMovement.create({
-    data: {
-      productId: stockProductId,
-      type: 'sale_cancel',
-      quantity: quantity,
-      stockAfter: updatedStockProduct.stock,
-      referenceId,
-      notes: `${notePrefix} (${product.linkedStockId ? product.name + ' → ' + stockProduct.name : product.name})`,
-    },
+  await applyStockMovement(tx, {
+    ...context,
+    productId: stockProductId,
+    type: 'sale',
+    quantity: -quantity,
+    referenceId,
+    notes: `${notePrefix} (${product.linkedStockId ? product.name + ' → ' + stockProduct.name : product.name})`,
   });
 }
 
@@ -326,7 +234,7 @@ export async function assertStockAfterReferenceReplacement(
       (replacementImpact.get(product.id) || 0);
 
     if (finalStock < -0.005) {
-      throw new Error(
+      throw new ValidationError(
         `Không thể ${actionLabel}: "${product.name}" sẽ còn ${finalStock.toFixed(2)} ${product.unit}`
       );
     }
@@ -338,29 +246,20 @@ export async function reverseRecordedStockImpact(
   impact: Map<string, number>,
   referenceId: string,
   movementType: string,
-  notes: string
+  notes: string,
+  context: StockOperationContext
 ): Promise<boolean> {
   if (impact.size === 0) return false;
 
   for (const [productId, quantity] of Array.from(impact.entries())) {
     const reverseQuantity = -quantity;
-    const updatedProduct = await tx.product.update({
-      where: { id: productId },
-      data: reverseQuantity >= 0
-        ? { stock: { increment: reverseQuantity } }
-        : { stock: { decrement: Math.abs(reverseQuantity) } },
-      select: { stock: true },
-    });
-
-    await tx.stockMovement.create({
-      data: {
-        productId,
-        type: movementType,
-        quantity: reverseQuantity,
-        stockAfter: updatedProduct.stock,
-        referenceId,
-        notes,
-      },
+    await applyStockMovement(tx, {
+      ...context,
+      productId,
+      type: movementType,
+      quantity: reverseQuantity,
+      referenceId,
+      notes,
     });
   }
 

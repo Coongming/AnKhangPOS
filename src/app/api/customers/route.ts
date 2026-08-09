@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode, generateCodeInTx } from '@/lib/utils';
+import { generateCodeInTx } from '@/lib/code-sequence';
 
 export async function GET(request: NextRequest) {
   try {
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     }
 
     const customer = await prisma.$transaction(async (tx) => {
-      const code = await generateCodeInTx(tx, 'KH', 'customer', 3);
+      const code = await generateCodeInTx(tx, 'KH');
       return tx.customer.create({
         data: { code, name: body.name, phone: body.phone || null, address: body.address || null, notes: body.notes || null },
       });

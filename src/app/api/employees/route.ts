@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode } from '@/lib/utils';
+import { generateCodeInTx } from '@/lib/code-sequence';
 
 // GET - List employees
 export async function GET() {
@@ -24,19 +24,19 @@ export async function POST(request: NextRequest) {
     const { name, phone, salaryType, hourlyRate, deliveryRate, notes } = await request.json();
     if (!name?.trim()) return NextResponse.json({ error: 'Vui lòng nhập tên' }, { status: 400 });
 
-    const last = await prisma.employee.findFirst({ orderBy: { code: 'desc' }, select: { code: true } });
-    const code = generateCode('NV', last?.code || null);
-
-    const employee = await prisma.employee.create({
-      data: {
-        code,
-        name: name.trim(),
-        phone: phone || null,
-        salaryType: salaryType || 'delivery',
-        hourlyRate: parseFloat(hourlyRate) || 0,
-        deliveryRate: parseFloat(deliveryRate) || 0,
-        notes: notes || null,
-      },
+    const employee = await prisma.$transaction(async (tx) => {
+      const code = await generateCodeInTx(tx, 'NV');
+      return tx.employee.create({
+        data: {
+          code,
+          name: name.trim(),
+          phone: phone || null,
+          salaryType: salaryType || 'delivery',
+          hourlyRate: parseFloat(hourlyRate) || 0,
+          deliveryRate: parseFloat(deliveryRate) || 0,
+          notes: notes || null,
+        },
+      });
     });
     return NextResponse.json(employee, { status: 201 });
   } catch (error) {

@@ -1,10 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { reallocateCustomerPayments } from '@/lib/debt-utils';
+import { CODE_PADDING, CodePrefix, normalizeCode } from '@/lib/code-sequence';
+import {
+  reallocateCustomerPayments,
+  recalcSupplierDebt,
+} from '@/lib/debt-utils';
+import { syncPurchasePayment } from '@/lib/supplier-payments';
+import {
+  applyStockMovement,
+  createStockOperationId,
+  recalculateStockLedgerForProducts,
+  roundStock,
+} from '@/lib/stock-ledger';
 
 const BACKUP_COLLECTIONS = [
   'systemSettings',
+  'codeSequences',
   'categories',
   'products',
   'blendTemplates',
@@ -28,6 +40,7 @@ const BACKUP_COLLECTIONS = [
 
 type BackupData = {
   systemSettings: Prisma.SystemSettingCreateManyInput[];
+  codeSequences: Prisma.CodeSequenceCreateManyInput[];
   categories: Prisma.ProductCategoryCreateManyInput[];
   products: Prisma.ProductCreateManyInput[];
   blendTemplates: Prisma.BlendTemplateCreateManyInput[];
@@ -87,6 +100,98 @@ function normalizePurchases(value: unknown): Prisma.PurchaseCreateManyInput[] {
   });
 }
 
+function normalizeSales(value: unknown): Prisma.SaleCreateManyInput[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((record) => {
+    if (!isObject(record)) {
+      throw new Error('Dữ liệu hóa đơn trong backup không hợp lệ');
+    }
+    return {
+      ...record,
+      stockVersion: Number(record.stockVersion ?? (record.status === 'completed' ? 1 : 0)),
+    } as Prisma.SaleCreateManyInput;
+  });
+}
+
+function normalizeStockMovements(
+  value: unknown
+): Prisma.StockMovementCreateManyInput[] {
+  if (!Array.isArray(value)) return [];
+
+  const records = value.map((record) => {
+    if (!isObject(record)) {
+      throw new Error('Dữ liệu biến động kho trong backup không hợp lệ');
+    }
+    return { ...record };
+  });
+
+  records.sort((left, right) => {
+    const leftSequence = Number(left.ledgerSequence ?? Number.MAX_SAFE_INTEGER);
+    const rightSequence = Number(right.ledgerSequence ?? Number.MAX_SAFE_INTEGER);
+    if (leftSequence !== rightSequence) return leftSequence - rightSequence;
+
+    const leftCreatedAt = new Date(String(left.createdAt ?? 0)).getTime();
+    const rightCreatedAt = new Date(String(right.createdAt ?? 0)).getTime();
+    if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt;
+
+    return String(left.id ?? '').localeCompare(String(right.id ?? ''));
+  });
+
+  return records.map((record) => {
+    delete record.ledgerSequence;
+    return {
+      ...record,
+      stockBefore: record.stockBefore ?? 0,
+    } as Prisma.StockMovementCreateManyInput;
+  });
+}
+
+function normalizeCodedRecords<T extends { code: string }>(
+  records: T[],
+  prefix: CodePrefix
+): T[] {
+  const seen = new Set<string>();
+  return records.map((record) => {
+    const code = normalizeCode(String(record.code), prefix);
+    if (seen.has(code)) {
+      throw new Error(`Backup có mã ${prefix} trùng nhau sau khi chuẩn hóa: ${code}`);
+    }
+    seen.add(code);
+    return { ...record, code };
+  });
+}
+
+function buildCodeSequences(
+  rawSequences: unknown,
+  codeCollections: Record<CodePrefix, Array<{ code: string }>>
+): Prisma.CodeSequenceCreateManyInput[] {
+  const savedValues = new Map<CodePrefix, number>();
+  if (Array.isArray(rawSequences)) {
+    for (const value of rawSequences) {
+      if (!isObject(value) || typeof value.prefix !== 'string') continue;
+      const prefix = value.prefix as CodePrefix;
+      if (!(prefix in CODE_PADDING)) continue;
+      const currentValue = Number(value.currentValue ?? value.current_value ?? 0);
+      if (Number.isSafeInteger(currentValue) && currentValue >= 0) {
+        savedValues.set(prefix, Math.max(savedValues.get(prefix) || 0, currentValue));
+      }
+    }
+  }
+
+  return (Object.keys(CODE_PADDING) as CodePrefix[]).map((prefix) => {
+    const maxCodeValue = codeCollections[prefix].reduce((max, record) => {
+      const value = Number(record.code.slice(prefix.length));
+      return Math.max(max, value);
+    }, 0);
+    return {
+      prefix,
+      currentValue: Math.max(savedValues.get(prefix) || 0, maxCodeValue),
+      updatedAt: new Date(),
+    };
+  });
+}
+
 function parseBackupData(body: unknown): BackupData | null {
   if (!isObject(body) || !isObject(body.data)) return null;
 
@@ -99,25 +204,68 @@ function parseBackupData(body: unknown): BackupData | null {
     }
   }
 
+  const products = normalizeCodedRecords(
+    (data.products ?? []) as Prisma.ProductCreateManyInput[],
+    'SP'
+  );
+  const blendHistories = normalizeCodedRecords(
+    (data.blendHistories ?? []) as Prisma.BlendHistoryCreateManyInput[],
+    'TR'
+  );
+  const customers = normalizeCodedRecords(
+    (data.customers ?? []) as Prisma.CustomerCreateManyInput[],
+    'KH'
+  );
+  const suppliers = normalizeCodedRecords(
+    (data.suppliers ?? []) as Prisma.SupplierCreateManyInput[],
+    'NCC'
+  );
+  const sales = normalizeCodedRecords(normalizeSales(data.sales), 'HD');
+  const purchases = normalizeCodedRecords(normalizePurchases(data.purchases), 'PN');
+  const employees = normalizeCodedRecords(
+    (data.employees ?? []) as Prisma.EmployeeCreateManyInput[],
+    'NV'
+  );
+  const debtTransactions = normalizeDebtTransactions(data.debtTransactions);
+  const purchaseIds = new Set(purchases.map((purchase) => String(purchase.id)));
+  const safeDebtTransactions = debtTransactions.map((transaction) => ({
+    ...transaction,
+    ...(
+      transaction.sourcePurchaseId && !purchaseIds.has(transaction.sourcePurchaseId)
+        ? { sourcePurchaseId: null }
+        : {}
+    ),
+  }));
+  const codeSequences = buildCodeSequences(data.codeSequences, {
+    HD: sales,
+    KH: customers,
+    PN: purchases,
+    NV: employees,
+    SP: products,
+    NCC: suppliers,
+    TR: blendHistories,
+  });
+
   return {
     systemSettings: data.systemSettings as Prisma.SystemSettingCreateManyInput[],
+    codeSequences,
     categories: (data.categories ?? []) as Prisma.ProductCategoryCreateManyInput[],
-    products: (data.products ?? []) as Prisma.ProductCreateManyInput[],
+    products,
     blendTemplates: (data.blendTemplates ?? []) as Prisma.BlendTemplateCreateManyInput[],
     blendTemplateItems: (data.blendTemplateItems ?? []) as Prisma.BlendTemplateItemCreateManyInput[],
-    blendHistories: (data.blendHistories ?? []) as Prisma.BlendHistoryCreateManyInput[],
+    blendHistories,
     blendHistoryItems: (data.blendHistoryItems ?? []) as Prisma.BlendHistoryItemCreateManyInput[],
-    customers: (data.customers ?? []) as Prisma.CustomerCreateManyInput[],
-    suppliers: (data.suppliers ?? []) as Prisma.SupplierCreateManyInput[],
-    sales: (data.sales ?? []) as Prisma.SaleCreateManyInput[],
+    customers,
+    suppliers,
+    sales,
     saleItems: (data.saleItems ?? []) as Prisma.SaleItemCreateManyInput[],
-    purchases: normalizePurchases(data.purchases),
+    purchases,
     purchaseItems: (data.purchaseItems ?? []) as Prisma.PurchaseItemCreateManyInput[],
-    debtTransactions: normalizeDebtTransactions(data.debtTransactions),
-    stockMovements: (data.stockMovements ?? []) as Prisma.StockMovementCreateManyInput[],
+    debtTransactions: safeDebtTransactions,
+    stockMovements: normalizeStockMovements(data.stockMovements),
     expenseCategories: (data.expenseCategories ?? []) as Prisma.ExpenseCategoryCreateManyInput[],
     expenses: (data.expenses ?? []) as Prisma.ExpenseCreateManyInput[],
-    employees: (data.employees ?? []) as Prisma.EmployeeCreateManyInput[],
+    employees,
     employeeShifts: (data.employeeShifts ?? []) as Prisma.EmployeeShiftCreateManyInput[],
     salaryPayments: (data.salaryPayments ?? []) as Prisma.SalaryPaymentCreateManyInput[],
   };
@@ -135,7 +283,7 @@ export async function POST(request: NextRequest) {
 
     // Kiểm tra version nếu có
     if (body && typeof body === 'object' && body.version && typeof body.version === 'string') {
-      const supportedVersions = ['1.0', '1.1', '2.0'];
+      const supportedVersions = ['1.0', '1.1', '1.2', '1.3', '2.0'];
       if (!supportedVersions.includes(body.version)) {
         return NextResponse.json({ error: `Phiên bản backup không hỗ trợ: ${body.version}` }, { status: 400 });
       }
@@ -167,6 +315,7 @@ export async function POST(request: NextRequest) {
       await tx.expense.deleteMany();
       await tx.stockMovement.deleteMany();
       await tx.customerPaymentAllocation.deleteMany();
+      await tx.supplierPaymentAllocation.deleteMany();
       await tx.debtTransaction.deleteMany();
 
       await tx.purchaseItem.deleteMany();
@@ -187,6 +336,7 @@ export async function POST(request: NextRequest) {
       await tx.expenseCategory.deleteMany();
       await tx.employee.deleteMany();
       await tx.systemSetting.deleteMany();
+      await tx.codeSequence.deleteMany();
       await tx.backupLog.deleteMany();
 
       // 2. INSERT RESTORED DATA in correct order (parent -> child)
@@ -230,6 +380,51 @@ export async function POST(request: NextRequest) {
       if (data.employeeShifts?.length) await tx.employeeShift.createMany({ data: data.employeeShifts });
       if (data.salaryPayments?.length) await tx.salaryPayment.createMany({ data: data.salaryPayments });
 
+      const restoredProductIds = data.products
+        .map((product) => product.id)
+        .filter((id): id is string => typeof id === 'string');
+      const restoredStocks = await recalculateStockLedgerForProducts(
+        tx,
+        restoredProductIds
+      );
+      const restoreOperationId = createStockOperationId();
+      for (const product of data.products) {
+        if (typeof product.id !== 'string') continue;
+        const savedStock = roundStock(Number(product.stock || 0));
+        const rebuiltStock = restoredStocks.get(product.id) || 0;
+        const difference = roundStock(savedStock - rebuiltStock);
+        if (Math.abs(difference) < 0.005) continue;
+
+        await applyStockMovement(tx, {
+          operationId: restoreOperationId,
+          productId: product.id,
+          type: 'adjustment',
+          quantity: difference,
+          notes: `Đối chiếu tồn khi khôi phục backup: ${rebuiltStock} → ${savedStock}`,
+        });
+      }
+
+      const restoredPurchases = await tx.purchase.findMany({
+        select: {
+          id: true,
+          code: true,
+          supplierId: true,
+          purchaseDate: true,
+          paidAmount: true,
+        },
+      });
+      for (const purchase of restoredPurchases) {
+        await syncPurchasePayment(tx, {
+          ...purchase,
+          paidAmount: Number(purchase.paidAmount),
+        });
+      }
+
+      const supplierIds = await tx.supplier.findMany({ select: { id: true } });
+      for (const supplier of supplierIds) {
+        await recalcSupplierDebt(tx, supplier.id);
+      }
+
       const customerIdsWithPayments = Array.from(new Set(
         data.debtTransactions
           .filter((transaction) =>
@@ -240,7 +435,11 @@ export async function POST(request: NextRequest) {
       for (const customerId of customerIdsWithPayments) {
         await reallocateCustomerPayments(tx, customerId);
       }
-    });
+
+      if (data.codeSequences.length) {
+        await tx.codeSequence.createMany({ data: data.codeSequences });
+      }
+    }, { maxWait: 20_000, timeout: 120_000 });
 
     return NextResponse.json({ success: true });
   } catch (error) {

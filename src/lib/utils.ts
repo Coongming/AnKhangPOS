@@ -30,48 +30,6 @@ export function formatDateTime(date: Date | string): string {
   }).format(new Date(date));
 }
 
-// Generate auto-increment code: SP001, NCC001, KH001, PN001, HD001
-export function generateCode(prefix: string, lastCode: string | null, padding = 4): string {
-  if (!lastCode) return `${prefix}${String(1).padStart(padding, '0')}`;
-  const num = parseInt(lastCode.replace(prefix, ''), 10);
-  return `${prefix}${String(num + 1).padStart(padding, '0')}`;
-}
-
-/**
- * Generate code inside a Prisma transaction to prevent race conditions.
- * Must be called within prisma.$transaction().
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function generateCodeInTx(
-  tx: any,
-  prefix: string,
-  model: 'sale' | 'purchase' | 'product' | 'customer' | 'supplier',
-  padding = 4
-): Promise<string> {
-  const modelMap: Record<string, unknown> = {
-    sale: tx.sale,
-    purchase: tx.purchase,
-    product: tx.product,
-    customer: tx.customer,
-    supplier: tx.supplier,
-  };
-  const prismaModel = modelMap[model] as {
-    findFirst: (args: Record<string, unknown>) => Promise<{ code: string } | null>;
-  };
-  if (!prismaModel) throw new Error(`Unknown model: ${model}`);
-
-  const where = model === 'purchase' ? { code: { startsWith: prefix } } : undefined;
-  const last = await prismaModel.findFirst({
-    ...(where ? { where } : {}),
-    orderBy: { code: 'desc' },
-    select: { code: true },
-  });
-
-  return generateCode(prefix, last?.code || null, padding);
-}
-
-
-
 // Vietnam timezone helpers (UTC+7) - dùng cho server-side
 const VN_OFFSET = 7 * 60 * 60 * 1000; // 7 hours in ms
 

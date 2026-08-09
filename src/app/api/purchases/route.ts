@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCodeInTx } from '@/lib/utils';
+import { generateCodeInTx } from '@/lib/code-sequence';
 import { recalcSupplierDebt } from '@/lib/debt-utils';
+import { syncPurchasePayment } from '@/lib/supplier-payments';
 import {
   assertStockAfterReferenceReplacement,
   getRecordedStockImpact,
   reverseRecordedStockImpact,
 } from '@/lib/stock-operations';
+import {
+  applyStockMovement,
+  createStockOperationId,
+  deleteReferenceStockHistory,
+} from '@/lib/stock-ledger';
 import {
   isValidationError,
   validatePositiveNumber,
@@ -131,10 +137,12 @@ async function refreshProductPurchaseCost(
 async function refreshSupplierDebts(
   tx: TxClient,
   supplierIds: string[]
-): Promise<void> {
-  for (const supplierId of Array.from(new Set(supplierIds))) {
-    await recalcSupplierDebt(tx, supplierId);
+): Promise<Map<string, number>> {
+  const balances = new Map<string, number>();
+  for (const supplierId of Array.from(new Set(supplierIds)).sort()) {
+    balances.set(supplierId, await recalcSupplierDebt(tx, supplierId));
   }
+  return balances;
 }
 
 // GET - List purchases
@@ -178,27 +186,34 @@ export async function POST(request: NextRequest) {
 
     const processed = processPurchaseItems(body.items);
     const paid = validatePositiveNumber(paidAmount || 0, 'Số tiền trả');
-    const debtAmount = processed.totalAmount - paid;
 
     const purchase = await prisma.$transaction(async (tx) => {
-      const code = await generateCodeInTx(tx, 'PN', 'purchase');
+      const code = await generateCodeInTx(tx, 'PN');
       const supplier = await tx.supplier.findUnique({
         where: { id: supplierId },
         select: { id: true },
       });
       if (!supplier) throw new ValidationError('Nhà cung cấp không tồn tại');
 
+      const parsedPurchaseDate = parseDate(purchaseDate, new Date());
       const newPurchase = await tx.purchase.create({
         data: {
           code,
           supplierId,
-          purchaseDate: parseDate(purchaseDate, new Date()),
+          purchaseDate: parsedPurchaseDate,
           totalAmount: processed.totalAmount,
           paidAmount: paid,
-          debtAmount,
+          debtAmount: processed.totalAmount,
           notes: notes || null,
+          stockVersion: 1,
         },
       });
+
+      const stockContext = {
+        operationId: createStockOperationId(),
+        documentVersion: 1,
+        documentDate: parsedPurchaseDate,
+      };
 
       const affectedProductIds = new Set<string>();
       for (const item of processed.items) {
@@ -215,20 +230,13 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        const updatedProduct = await tx.product.update({
-          where: { id: item.productId },
-          data: { stock: { increment: item.quantity } },
-          select: { stock: true },
-        });
-        await tx.stockMovement.create({
-          data: {
-            productId: item.productId,
-            type: 'purchase',
-            quantity: item.quantity,
-            stockAfter: updatedProduct.stock,
-            referenceId: newPurchase.id,
-            notes: `Nhập hàng - ${code}`,
-          },
+        await applyStockMovement(tx, {
+          ...stockContext,
+          productId: item.productId,
+          type: 'purchase',
+          quantity: item.quantity,
+          referenceId: newPurchase.id,
+          notes: `Nhập hàng - ${code}`,
         });
         affectedProductIds.add(item.productId);
       }
@@ -236,9 +244,22 @@ export async function POST(request: NextRequest) {
       for (const productId of Array.from(affectedProductIds)) {
         await refreshProductPurchaseCost(tx, productId);
       }
-      await recalcSupplierDebt(tx, supplierId);
+      const paymentId = await syncPurchasePayment(tx, {
+        id: newPurchase.id,
+        code,
+        supplierId,
+        purchaseDate: parsedPurchaseDate,
+        paidAmount: paid,
+      });
+      const supplierDebt = await recalcSupplierDebt(tx, supplierId);
+      if (paymentId) {
+        await tx.debtTransaction.update({
+          where: { id: paymentId },
+          data: { balanceAfter: supplierDebt },
+        });
+      }
 
-      return newPurchase;
+      return tx.purchase.findUniqueOrThrow({ where: { id: newPurchase.id } });
     });
 
     return NextResponse.json(purchase, { status: 201 });
@@ -278,28 +299,47 @@ export async function PUT(request: NextRequest) {
 
       const { purchaseDate, notes, supplierId, items, paidAmount } = body;
       const newSupplierId = supplierId || purchase.supplierId;
+      const parsedPurchaseDate = parseDate(purchaseDate, purchase.purchaseDate);
 
       if (!items) {
         await prisma.$transaction(async (tx) => {
+          const supplier = await tx.supplier.findUnique({
+            where: { id: newSupplierId },
+            select: { id: true },
+          });
+          if (!supplier) throw new ValidationError('Nhà cung cấp không tồn tại');
+
           await tx.purchase.update({
             where: { id },
             data: {
-              purchaseDate: parseDate(purchaseDate, purchase.purchaseDate),
+              purchaseDate: parsedPurchaseDate,
               notes: notes === undefined ? purchase.notes : (notes || null),
               supplierId: newSupplierId,
             },
           });
-          await refreshSupplierDebts(
+          const paymentId = await syncPurchasePayment(tx, {
+            id: purchase.id,
+            code: purchase.code,
+            supplierId: newSupplierId,
+            purchaseDate: parsedPurchaseDate,
+            paidAmount: Number(purchase.paidAmount),
+          });
+          const balances = await refreshSupplierDebts(
             tx,
             [purchase.supplierId, newSupplierId]
           );
+          if (paymentId) {
+            await tx.debtTransaction.update({
+              where: { id: paymentId },
+              data: { balanceAfter: balances.get(newSupplierId) || 0 },
+            });
+          }
         });
         return NextResponse.json({ success: true });
       }
 
       const processed = processPurchaseItems(items);
       const paid = validatePositiveNumber(paidAmount || 0, 'Số tiền trả');
-      const debtAmount = processed.totalAmount - paid;
 
       await prisma.$transaction(async (tx) => {
         const supplier = await tx.supplier.findUnique({
@@ -308,11 +348,14 @@ export async function PUT(request: NextRequest) {
         });
         if (!supplier) throw new ValidationError('Nhà cung cấp không tồn tại');
 
-        let oldImpact = await getRecordedStockImpact(tx, id);
-        if (oldImpact.size === 0) {
-          oldImpact = groupPurchaseImpact(purchase.items);
+        const oldImpact = await getRecordedStockImpact(tx, id);
+        if (oldImpact.size === 0 && purchase.items.length > 0) {
+          throw new ValidationError(`Phiếu ${purchase.code} thiếu lịch sử kho. Hãy rebuild sổ kho trước khi sửa.`);
         }
         const newImpact = groupPurchaseImpact(processed.items);
+        const currentStockVersion = Math.max(1, purchase.stockVersion);
+        const nextStockVersion = currentStockVersion + 1;
+        const operationId = createStockOperationId();
         await assertStockAfterReferenceReplacement(
           tx,
           oldImpact,
@@ -324,7 +367,12 @@ export async function PUT(request: NextRequest) {
           oldImpact,
           id,
           'purchase_edit_reverse',
-          `Sửa phiếu nhập (hoàn tác) - ${purchase.code}`
+          `Sửa phiếu nhập (hoàn tác) - ${purchase.code}`,
+          {
+            operationId,
+            documentVersion: currentStockVersion,
+            documentDate: purchase.purchaseDate,
+          }
         );
 
         await tx.purchaseItem.deleteMany({ where: { purchaseId: id } });
@@ -333,11 +381,12 @@ export async function PUT(request: NextRequest) {
           where: { id },
           data: {
             supplierId: newSupplierId,
-            purchaseDate: parseDate(purchaseDate, purchase.purchaseDate),
+            purchaseDate: parsedPurchaseDate,
             totalAmount: processed.totalAmount,
             paidAmount: paid,
-            debtAmount,
+            debtAmount: processed.totalAmount,
             notes: notes === undefined ? purchase.notes : (notes || null),
+            stockVersion: nextStockVersion,
           },
         });
 
@@ -353,30 +402,38 @@ export async function PUT(request: NextRequest) {
               ...item,
             },
           });
-          const updatedProduct = await tx.product.update({
-            where: { id: item.productId },
-            data: { stock: { increment: item.quantity } },
-            select: { stock: true },
-          });
-          await tx.stockMovement.create({
-            data: {
-              productId: item.productId,
-              type: 'purchase',
-              quantity: item.quantity,
-              stockAfter: updatedProduct.stock,
-              referenceId: id,
-              notes: `Sửa phiếu nhập - ${purchase.code}`,
-            },
+          await applyStockMovement(tx, {
+            operationId,
+            documentVersion: nextStockVersion,
+            documentDate: parsedPurchaseDate,
+            productId: item.productId,
+            type: 'purchase',
+            quantity: item.quantity,
+            referenceId: id,
+            notes: `Sửa phiếu nhập - ${purchase.code}`,
           });
         }
 
         for (const productId of Array.from(affectedProductIds)) {
           await refreshProductPurchaseCost(tx, productId);
         }
-        await refreshSupplierDebts(
+        const paymentId = await syncPurchasePayment(tx, {
+          id: purchase.id,
+          code: purchase.code,
+          supplierId: newSupplierId,
+          purchaseDate: parsedPurchaseDate,
+          paidAmount: paid,
+        });
+        const balances = await refreshSupplierDebts(
           tx,
           [purchase.supplierId, newSupplierId]
         );
+        if (paymentId) {
+          await tx.debtTransaction.update({
+            where: { id: paymentId },
+            data: { balanceAfter: balances.get(newSupplierId) || 0 },
+          });
+        }
       });
 
       return NextResponse.json({ success: true });
@@ -395,9 +452,9 @@ export async function PUT(request: NextRequest) {
       }
 
       await prisma.$transaction(async (tx) => {
-        let oldImpact = await getRecordedStockImpact(tx, id);
-        if (oldImpact.size === 0) {
-          oldImpact = groupPurchaseImpact(purchase.items);
+        const oldImpact = await getRecordedStockImpact(tx, id);
+        if (oldImpact.size === 0 && purchase.items.length > 0) {
+          throw new ValidationError(`Phiếu ${purchase.code} thiếu lịch sử kho. Hãy rebuild sổ kho trước khi hủy.`);
         }
         await assertStockAfterReferenceReplacement(
           tx,
@@ -410,7 +467,12 @@ export async function PUT(request: NextRequest) {
           oldImpact,
           id,
           'purchase_cancel',
-          `Hủy phiếu nhập - ${purchase.code}`
+          `Hủy phiếu nhập - ${purchase.code}`,
+          {
+            operationId: createStockOperationId(),
+            documentVersion: Math.max(1, purchase.stockVersion),
+            documentDate: purchase.purchaseDate,
+          }
         );
         await tx.purchase.update({
           where: { id },
@@ -437,7 +499,7 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-// DELETE - Delete purchase and retain stock audit movements
+// DELETE - Delete the purchase and all of its stock history
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -455,11 +517,11 @@ export async function DELETE(request: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
-      let oldImpact = new Map<string, number>();
+      let affectedProductIds = new Set<string>();
       if (purchase.status === 'completed') {
-        oldImpact = await getRecordedStockImpact(tx, id);
-        if (oldImpact.size === 0) {
-          oldImpact = groupPurchaseImpact(purchase.items);
+        const oldImpact = await getRecordedStockImpact(tx, id);
+        if (oldImpact.size === 0 && purchase.items.length > 0) {
+          throw new ValidationError(`Phiếu ${purchase.code} thiếu lịch sử kho. Hãy rebuild sổ kho trước khi xóa.`);
         }
         await assertStockAfterReferenceReplacement(
           tx,
@@ -467,31 +529,30 @@ export async function DELETE(request: NextRequest) {
           new Map(),
           `xóa phiếu ${purchase.code}`
         );
-        await reverseRecordedStockImpact(
-          tx,
-          oldImpact,
-          id,
-          'purchase_delete_reverse',
-          `Xóa phiếu nhập - ${purchase.code}`
-        );
+        affectedProductIds = await deleteReferenceStockHistory(tx, id);
+      } else {
+        affectedProductIds = await deleteReferenceStockHistory(tx, id);
       }
 
       await tx.purchaseItem.deleteMany({ where: { purchaseId: id } });
       await tx.purchase.delete({ where: { id } });
 
-      const affectedProductIds = oldImpact.size > 0
-        ? Array.from(oldImpact.keys())
-        : Array.from(new Set(purchase.items.map((item) => item.productId)));
-      for (const productId of affectedProductIds) {
+      for (const productId of Array.from(new Set([
+        ...Array.from(affectedProductIds),
+        ...purchase.items.map((item) => item.productId),
+      ]))) {
         await refreshProductPurchaseCost(tx, productId);
       }
       await recalcSupplierDebt(tx, purchase.supplierId);
-    });
+    }, { maxWait: 10_000, timeout: 30_000 });
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Purchases DELETE error:', error);
     const message = error instanceof Error ? error.message : 'Lỗi xóa phiếu nhập';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: message },
+      { status: isValidationError(error) ? 400 : 500 }
+    );
   }
 }

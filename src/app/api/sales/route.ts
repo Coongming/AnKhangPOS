@@ -1,14 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCodeInTx } from '@/lib/utils';
+import { generateCodeInTx } from '@/lib/code-sequence';
 import {
   calculateSaleCostPrice,
   checkStockForProduct,
   deductStockForProduct,
   getRecordedStockImpact,
   reverseRecordedStockImpact,
-  reverseStockForProduct,
 } from '@/lib/stock-operations';
+import {
+  createStockOperationId,
+  deleteReferenceStockHistory,
+} from '@/lib/stock-ledger';
 import {
   reallocateCustomerPayments,
   recalcCustomerDebt,
@@ -194,13 +197,14 @@ export async function POST(request: NextRequest) {
       paymentMethod,
       deliveryEmployeeId,
       status,
+      saleDate,
     } = body;
 
     const isPending = status === 'pending';
     const allowNegative = await getAllowNegativeStock();
 
     const sale = await prisma.$transaction(async (tx) => {
-      const code = await generateCodeInTx(tx, 'HD', 'sale');
+      const code = await generateCodeInTx(tx, 'HD');
       const processed = await processSaleItems(tx, items);
 
       if (!isPending) {
@@ -234,6 +238,7 @@ export async function POST(request: NextRequest) {
         data: {
           code,
           customerId: selectedCustomerId,
+          saleDate: parseDate(saleDate, new Date()),
           subtotal: processed.subtotal,
           discount: orderDiscount,
           totalAmount,
@@ -244,8 +249,15 @@ export async function POST(request: NextRequest) {
           paymentMethod: isPending ? 'cash' : (paymentMethod || 'cash'),
           deliveryEmployeeId: deliveryEmployeeId || null,
           status: isPending ? 'pending' : 'completed',
+          stockVersion: isPending ? 0 : 1,
         },
       });
+
+      const stockContext = {
+        operationId: createStockOperationId(),
+        documentVersion: 1,
+        documentDate: newSale.saleDate,
+      };
 
       for (const item of processed.items) {
         await tx.saleItem.create({
@@ -259,7 +271,8 @@ export async function POST(request: NextRequest) {
             item.quantity,
             newSale.id,
             `Bán hàng - ${code}`,
-            allowNegative
+            allowNegative,
+            stockContext
           );
         }
       }
@@ -347,27 +360,31 @@ export async function PUT(request: NextRequest) {
       const allowNegative = await getAllowNegativeStock();
 
       await prisma.$transaction(async (tx) => {
+        const parsedSaleDate = parseDate(saleDate, sale.saleDate);
+        const currentStockVersion = Math.max(1, sale.stockVersion);
+        const nextStockVersion = sale.status === 'completed'
+          ? currentStockVersion + 1
+          : sale.stockVersion;
+        const operationId = createStockOperationId();
+
         if (sale.status === 'completed') {
           const stockImpact = await getRecordedStockImpact(tx, id);
-          const reversedFromMovements = await reverseRecordedStockImpact(
+          const reverseContext = {
+            operationId,
+            documentVersion: currentStockVersion,
+            documentDate: sale.saleDate,
+          };
+          if (stockImpact.size === 0 && sale.items.length > 0) {
+            throw new ValidationError(`Hóa đơn ${sale.code} thiếu lịch sử kho. Hãy rebuild sổ kho trước khi sửa.`);
+          }
+          await reverseRecordedStockImpact(
             tx,
             stockImpact,
             id,
             'sale_edit_reverse',
-            `Sửa HĐ (hoàn kho) - ${sale.code}`
+            `Sửa HĐ (hoàn kho) - ${sale.code}`,
+            reverseContext
           );
-
-          if (!reversedFromMovements) {
-            for (const oldItem of sale.items) {
-              await reverseStockForProduct(
-                tx,
-                oldItem.productId,
-                Number(oldItem.quantity),
-                id,
-                `Sửa HĐ (hoàn kho) - ${sale.code}`
-              );
-            }
-          }
         }
 
         const processed = await processSaleItems(tx, items, sale.items);
@@ -408,7 +425,7 @@ export async function PUT(request: NextRequest) {
           where: { id },
           data: {
             customerId: newCustomerId,
-            saleDate: parseDate(saleDate, sale.saleDate),
+            saleDate: parsedSaleDate,
             subtotal: processed.subtotal,
             discount: orderDiscount,
             totalAmount,
@@ -417,8 +434,15 @@ export async function PUT(request: NextRequest) {
             debtAmount,
             notes: notes === undefined ? sale.notes : (notes || null),
             paymentMethod: isPending ? 'cash' : (paymentMethod || sale.paymentMethod),
+            stockVersion: nextStockVersion,
           },
         });
+
+        const applyContext = {
+          operationId,
+          documentVersion: nextStockVersion,
+          documentDate: parsedSaleDate,
+        };
 
         for (const item of processed.items) {
           await tx.saleItem.create({
@@ -432,7 +456,8 @@ export async function PUT(request: NextRequest) {
               item.quantity,
               id,
               `Sửa hóa đơn - ${sale.code}`,
-              allowNegative
+              allowNegative,
+              applyContext
             );
           }
         }
@@ -464,6 +489,11 @@ export async function PUT(request: NextRequest) {
       const allowNegative = await getAllowNegativeStock();
 
       await prisma.$transaction(async (tx) => {
+        const stockContext = {
+          operationId: createStockOperationId(),
+          documentVersion: 1,
+          documentDate: sale.saleDate,
+        };
         let totalCost = 0;
         const currentCosts = new Map<string, number>();
 
@@ -499,6 +529,7 @@ export async function PUT(request: NextRequest) {
             debtAmount,
             totalCost,
             deliveryEmployeeId: deliveryEmployeeId || null,
+            stockVersion: 1,
           },
         });
 
@@ -513,7 +544,8 @@ export async function PUT(request: NextRequest) {
             Number(item.quantity),
             id,
             `Bán hàng (hoàn thành đơn chờ) - ${sale.code}`,
-            allowNegative
+            allowNegative,
+            stockContext
           );
         }
 
@@ -557,7 +589,7 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-// DELETE - Delete sale and keep stock audit movements
+// DELETE - Delete the sale and all of its stock history
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -577,25 +609,10 @@ export async function DELETE(request: NextRequest) {
     await prisma.$transaction(async (tx) => {
       if (sale.status === 'completed') {
         const stockImpact = await getRecordedStockImpact(tx, id);
-        const reversedFromMovements = await reverseRecordedStockImpact(
-          tx,
-          stockImpact,
-          id,
-          'sale_delete_reverse',
-          `Xóa hóa đơn - ${sale.code}`
-        );
-
-        if (!reversedFromMovements) {
-          for (const item of sale.items) {
-            await reverseStockForProduct(
-              tx,
-              item.productId,
-              Number(item.quantity),
-              id,
-              `Xóa hóa đơn - ${sale.code}`
-            );
-          }
+        if (stockImpact.size === 0 && sale.items.length > 0) {
+          throw new ValidationError(`Hóa đơn ${sale.code} thiếu lịch sử kho. Hãy rebuild sổ kho trước khi xóa.`);
         }
+        await deleteReferenceStockHistory(tx, id);
       }
 
       await tx.saleItem.deleteMany({ where: { saleId: id } });
@@ -604,12 +621,15 @@ export async function DELETE(request: NextRequest) {
       if (sale.status === 'completed') {
         await refreshCustomerDebt(tx, [sale.customerId]);
       }
-    });
+    }, { maxWait: 10_000, timeout: 30_000 });
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Sales DELETE error:', error);
     const message = error instanceof Error ? error.message : 'Lỗi xóa hóa đơn';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: message },
+      { status: isValidationError(error) ? 400 : 500 }
+    );
   }
 }

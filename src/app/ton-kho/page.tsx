@@ -6,7 +6,7 @@ import { useToast } from '@/components/Toast';
 import { formatNumber, formatDateTime } from '@/lib/utils';
 
 interface StockProduct { id: string; code: string; name: string; unit: string; stock: number; minStock: number; category: { name: string }; }
-interface StockMovement { id: string; type: string; quantity: number; stockAfter: number; notes: string | null; createdAt: string; product: { name: string; unit: string }; }
+interface StockMovement { id: string; ledgerSequence: number; type: string; quantity: number; stockBefore: number; stockAfter: number; notes: string | null; createdAt: string; product: { name: string; unit: string }; }
 
 const typeLabels: Record<string, string> = {
   purchase: 'Nhập hàng',
@@ -147,7 +147,7 @@ export default function StockPage() {
           ) : (
             <div className="table-wrapper" style={{ maxHeight: 500, overflowY: 'auto' }}>
               <table className="table">
-                <thead><tr><th>Thời gian</th><th>Loại</th><th className="text-right">SL</th><th className="text-right">Sau</th><th>Ghi chú</th></tr></thead>
+                <thead><tr><th>Thời gian</th><th>Loại</th><th className="text-right">SL</th><th className="text-right">Trước</th><th className="text-right">Sau</th><th>Ghi chú</th></tr></thead>
                 <tbody>
                   {movements.map((m) => (
                     <tr key={m.id}>
@@ -156,6 +156,7 @@ export default function StockPage() {
                       <td className="text-right" style={{ fontWeight: 600, color: m.quantity > 0 ? 'var(--success)' : 'var(--danger)' }}>
                         {m.quantity > 0 ? '+' : ''}{formatNumber(m.quantity)}
                       </td>
+                      <td className="text-right">{formatNumber(m.stockBefore)}</td>
                       <td className="text-right">{formatNumber(m.stockAfter)}</td>
                       <td className="text-muted" style={{ fontSize: 12 }}>{m.notes || '—'}</td>
                     </tr>

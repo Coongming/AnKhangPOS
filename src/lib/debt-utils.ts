@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 
@@ -124,35 +124,115 @@ export async function reallocateCustomerPayments(tx: TxClient, customerId: strin
 }
 
 /**
- * Tính lại công nợ nhà cung cấp từ dữ liệu gốc
+ * Dựng lại toàn bộ phân bổ tiền trả nhà cung cấp theo FIFO.
+ *
+ * Phiếu nhập là nghĩa vụ phải trả, còn DebtTransaction là tiền thực chi.
+ * Hai dữ liệu này độc lập nên xóa/hủy phiếu không xóa lịch sử tiền; phần tiền
+ * chưa phân bổ sẽ trở thành ứng trước và tự bù vào phiếu nhập tiếp theo.
  */
-export async function recalcSupplierDebt(tx: TxClient, supplierId: string): Promise<number> {
-  // 1. Tổng nợ từ phiếu nhập completed
-  const purchaseDebt = await tx.purchase.aggregate({
-    where: { supplierId, status: 'completed' },
-    _sum: { debtAmount: true },
-  });
-  const totalPurchaseDebt = Number(purchaseDebt._sum.debtAmount || 0);
+export async function reallocateSupplierPayments(
+  tx: TxClient,
+  supplierId: string
+): Promise<number> {
+  await tx.$queryRaw(Prisma.sql`
+    SELECT "id" FROM "suppliers" WHERE "id" = ${supplierId} FOR UPDATE
+  `);
 
-  // 2. Tổng thanh toán nợ thực tế
-  const payments = await tx.debtTransaction.aggregate({
+  const [purchases, payments] = await Promise.all([
+    tx.purchase.findMany({
+      where: { supplierId, status: 'completed' },
+      select: { id: true, totalAmount: true },
+      orderBy: [
+        { purchaseDate: 'asc' },
+        { createdAt: 'asc' },
+        { id: 'asc' },
+      ],
+    }),
+    tx.debtTransaction.findMany({
+      where: { supplierId, type: 'supplier_payment' },
+      select: { id: true, amount: true },
+      orderBy: [
+        { createdAt: 'asc' },
+        { id: 'asc' },
+      ],
+    }),
+  ]);
+
+  await tx.supplierPaymentAllocation.deleteMany({
     where: {
-      supplierId,
-      type: 'supplier_payment',
+      transaction: { supplierId, type: 'supplier_payment' },
     },
-    _sum: { amount: true },
   });
-  const totalPayments = Math.abs(Number(payments._sum.amount || 0));
 
-  // 3. Debt = nợ từ phiếu nhập - đã trả.
-  // Cho phép âm để thể hiện tiền ứng trước/trả dư cho nhà cung cấp.
-  const correctDebt = totalPurchaseDebt - totalPayments;
+  const remainingByPurchase = purchases.map((purchase) => ({
+    id: purchase.id,
+    totalAmount: Number(purchase.totalAmount),
+    remaining: Number(purchase.totalAmount),
+  }));
+  const allocations: Array<{
+    transactionId: string;
+    purchaseId: string;
+    amount: number;
+  }> = [];
+  let purchaseIndex = 0;
 
-  // 4. Update
+  for (const payment of payments) {
+    let paymentRemaining = Math.abs(Number(payment.amount));
+
+    while (paymentRemaining > 0 && purchaseIndex < remainingByPurchase.length) {
+      const purchase = remainingByPurchase[purchaseIndex];
+      if (purchase.remaining <= 0) {
+        purchaseIndex += 1;
+        continue;
+      }
+
+      const amount = Math.min(paymentRemaining, purchase.remaining);
+      allocations.push({
+        transactionId: payment.id,
+        purchaseId: purchase.id,
+        amount,
+      });
+      paymentRemaining -= amount;
+      purchase.remaining -= amount;
+    }
+  }
+
+  if (allocations.length > 0) {
+    await tx.supplierPaymentAllocation.createMany({ data: allocations });
+  }
+
+  for (const purchase of remainingByPurchase) {
+    await tx.purchase.update({
+      where: { id: purchase.id },
+      data: { debtAmount: Math.max(0, purchase.remaining) },
+    });
+  }
+  await tx.purchase.updateMany({
+    where: { supplierId, status: { not: 'completed' }, debtAmount: { not: 0 } },
+    data: { debtAmount: 0 },
+  });
+
+  const totalPurchases = remainingByPurchase.reduce(
+    (sum, purchase) => sum + purchase.totalAmount,
+    0
+  );
+  const totalPayments = payments.reduce(
+    (sum, payment) => sum + Math.abs(Number(payment.amount)),
+    0
+  );
+  const correctDebt = totalPurchases - totalPayments;
+
   await tx.supplier.update({
     where: { id: supplierId },
     data: { debt: correctDebt },
   });
 
   return correctDebt;
+}
+
+export async function recalcSupplierDebt(
+  tx: TxClient,
+  supplierId: string
+): Promise<number> {
+  return reallocateSupplierPayments(tx, supplierId);
 }

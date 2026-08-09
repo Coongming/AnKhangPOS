@@ -13,7 +13,9 @@
     "db:update": "tsx scripts/update_local_database.ts",
     "db:pull-online": "tsx scripts/pull_online_to_local.ts",
     "db:update-online-schema": "tsx scripts/update_online_schema.ts",
+    "stock:rebuild-ledger": "tsx scripts/rebuild_stock_from_history.ts",
     "debt:rebuild-allocations": "tsx scripts/rebuild_customer_payment_allocations.ts",
+    "debt:rebuild-supplier-fifo": "tsx scripts/rebuild_supplier_payment_allocations.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

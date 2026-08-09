@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
       if (!supplier) return NextResponse.json({ error: 'Không tìm thấy nhà cung cấp' }, { status: 404 });
 
       await prisma.$transaction(async (tx) => {
-        await tx.debtTransaction.create({
+        const payment = await tx.debtTransaction.create({
           data: {
             type: 'supplier_payment',
             supplierId: entityId,
@@ -82,9 +82,14 @@ export async function POST(request: NextRequest) {
             notes: notes || 'Trả nợ nhà cung cấp',
             paymentMethod: paymentMethod || null,
           },
+          select: { id: true },
         });
 
-        await recalcSupplierDebt(tx, entityId);
+        const balanceAfter = await recalcSupplierDebt(tx, entityId);
+        await tx.debtTransaction.update({
+          where: { id: payment.id },
+          data: { balanceAfter },
+        });
       });
     } else {
       return NextResponse.json({ error: 'Loại thanh toán không hợp lệ' }, { status: 400 });

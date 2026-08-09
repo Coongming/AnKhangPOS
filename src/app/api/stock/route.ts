@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { applyBlendVirtualStock } from '@/lib/blend-stock';
+import {
+  applyStockMovement,
+  createStockOperationId,
+} from '@/lib/stock-ledger';
 
 // GET - Stock movements + current stock
 export async function GET(request: NextRequest) {
@@ -18,7 +22,7 @@ export async function GET(request: NextRequest) {
         prisma.stockMovement.findMany({
           where,
           include: { product: { select: { name: true, code: true, unit: true } } },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { ledgerSequence: 'desc' },
           take: 100,
         }),
         prisma.product.findUnique({
@@ -101,19 +105,12 @@ export async function POST(request: NextRequest) {
     if (diff === 0) return NextResponse.json({ message: 'Không có thay đổi' });
 
     await prisma.$transaction(async (tx) => {
-      await tx.product.update({
-        where: { id: targetProductId },
-        data: { stock: actual },
-      });
-
-      await tx.stockMovement.create({
-        data: {
-          productId: targetProductId,
-          type: 'adjustment',
-          quantity: diff,
-          stockAfter: actual,
-          notes: notes || `Điều chỉnh kiểm kê: ${targetProduct.stock} → ${actual}${product.linkedStockId ? ` (từ ${product.name})` : ''}`,
-        },
+      await applyStockMovement(tx, {
+        operationId: createStockOperationId(),
+        productId: targetProductId,
+        type: 'adjustment',
+        quantity: diff,
+        notes: notes || `Điều chỉnh kiểm kê: ${targetProduct.stock} → ${actual}${product.linkedStockId ? ` (từ ${product.name})` : ''}`,
       });
     });
 

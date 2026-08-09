@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode, generateCodeInTx } from '@/lib/utils';
+import { generateCodeInTx } from '@/lib/code-sequence';
 import { applyBlendVirtualStock } from '@/lib/blend-stock';
 
 // GET - List products
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
 
     // Generate code + create inside transaction to prevent race condition
     const product = await prisma.$transaction(async (tx) => {
-      const code = await generateCodeInTx(tx, 'SP', 'product');
+      const code = await generateCodeInTx(tx, 'SP');
 
       return tx.product.create({
         data: {

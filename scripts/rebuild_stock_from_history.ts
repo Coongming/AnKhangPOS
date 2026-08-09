@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -11,21 +11,43 @@ type StockEvent = {
   sourceId: string;
   sourceCode: string;
   itemId: string;
-  type: 'purchase' | 'sale';
+  type: 'purchase' | 'adjustment' | 'sale';
   quantity: number;
+  referenceId: string | null;
+  operationId: string;
+  documentVersion: number | null;
+  documentDate: Date | null;
   notes: string;
+};
+
+type NegativeInterval = {
+  productCode: string;
+  productName: string;
+  unit: string;
+  startCode: string;
+  startAt: Date;
+  lowestStock: number;
+  lowestCode: string;
+  endCode: string | null;
+  endAt: Date | null;
+  endingStock: number | null;
 };
 
 function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+function eventPriority(type: StockEvent['type']): number {
+  if (type === 'purchase') return 0;
+  if (type === 'adjustment') return 1;
+  return 2;
+}
+
 function compareEvents(a: StockEvent, b: StockEvent): number {
   const eventDiff = a.eventAt.getTime() - b.eventAt.getTime();
   if (eventDiff !== 0) return eventDiff;
 
-  // When old imported records only have a date, keep same-day purchases before sales.
-  const typeDiff = (a.type === 'purchase' ? 0 : 1) - (b.type === 'purchase' ? 0 : 1);
+  const typeDiff = eventPriority(a.type) - eventPriority(b.type);
   if (typeDiff !== 0) return typeDiff;
 
   const createdDiff = a.sourceCreatedAt.getTime() - b.sourceCreatedAt.getTime();
@@ -37,61 +59,60 @@ function compareEvents(a: StockEvent, b: StockEvent): number {
   return a.itemId.localeCompare(b.itemId);
 }
 
-function withDeterministicTimestamp(event: StockEvent, indexInTimestamp: number): Date {
-  return new Date(event.eventAt.getTime() + indexInTimestamp);
-}
-
 async function main() {
   const apply = process.argv.includes('--apply');
 
-  const [products, purchases, sales, existingMovementCount] = await Promise.all([
+  const [products, purchases, sales, adjustments, existingMovementCount] = await Promise.all([
     prisma.product.findMany({
-      select: { id: true, code: true, name: true, stock: true },
+      include: {
+        blendTemplate: { include: { items: true } },
+      },
       orderBy: { code: 'asc' },
     }),
     prisma.purchase.findMany({
       where: { status: 'completed' },
-      include: {
-        items: {
-          include: {
-            product: { select: { code: true, name: true } },
-          },
-        },
-      },
+      include: { items: true },
       orderBy: [{ purchaseDate: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     }),
     prisma.sale.findMany({
       where: { status: 'completed' },
-      include: {
-        items: {
-          include: {
-            product: { select: { code: true, name: true } },
-          },
-        },
-      },
+      include: { items: true },
       orderBy: [{ saleDate: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    }),
+    prisma.stockMovement.findMany({
+      where: { type: 'adjustment' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     }),
     prisma.stockMovement.count(),
   ]);
 
-  const currentStockByProduct = new Map(products.map((product) => [product.id, Number(product.stock)]));
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const currentStockByProduct = new Map(
+    products.map((product) => [product.id, Number(product.stock)])
+  );
   const finalStockByProduct = new Map(products.map((product) => [product.id, 0]));
   const events: StockEvent[] = [];
 
   for (const purchase of purchases) {
     for (const item of purchase.items) {
-      const quantity = round2(Number(item.quantity));
+      const product = productById.get(item.productId);
+      if (!product) throw new Error(`Phiếu ${purchase.code} chứa sản phẩm không tồn tại`);
+
       events.push({
         productId: item.productId,
-        productCode: item.product.code,
-        productName: item.product.name,
+        productCode: product.code,
+        productName: product.name,
         eventAt: purchase.purchaseDate,
         sourceCreatedAt: purchase.createdAt,
         sourceId: purchase.id,
         sourceCode: purchase.code,
         itemId: item.id,
         type: 'purchase',
-        quantity,
+        quantity: round2(Number(item.quantity)),
+        referenceId: purchase.id,
+        operationId: `rebuild:purchase:${purchase.id}`,
+        documentVersion: Math.max(1, purchase.stockVersion),
+        documentDate: purchase.purchaseDate,
         notes: `Nhập hàng - ${purchase.code}`,
       });
     }
@@ -99,82 +120,151 @@ async function main() {
 
   for (const sale of sales) {
     for (const item of sale.items) {
-      const quantity = round2(-Number(item.quantity));
+      const soldProduct = productById.get(item.productId);
+      if (!soldProduct) throw new Error(`Hóa đơn ${sale.code} chứa sản phẩm không tồn tại`);
+
+      const quantity = Number(item.quantity);
+      const templateItems = soldProduct.blendTemplate?.items || [];
+
+      if (soldProduct.blendTemplateId && templateItems.length > 0) {
+        const templateTotal = templateItems.reduce(
+          (sum, templateItem) => sum + Number(templateItem.quantity),
+          0
+        );
+        if (templateTotal <= 0) {
+          throw new Error(`Mẫu trộn của ${soldProduct.code} có tổng số lượng bằng 0`);
+        }
+
+        for (const ingredient of templateItems) {
+          const ingredientProduct = productById.get(ingredient.productId);
+          if (!ingredientProduct) {
+            throw new Error(`Mẫu trộn của ${soldProduct.code} chứa sản phẩm không tồn tại`);
+          }
+          const ratio = Number(ingredient.quantity) / templateTotal;
+          events.push({
+            productId: ingredient.productId,
+            productCode: ingredientProduct.code,
+            productName: ingredientProduct.name,
+            eventAt: sale.saleDate,
+            sourceCreatedAt: sale.createdAt,
+            sourceId: sale.id,
+            sourceCode: sale.code,
+            itemId: `${item.id}:${ingredient.id}`,
+            type: 'sale',
+            quantity: round2(-quantity * ratio),
+            referenceId: sale.id,
+            operationId: `rebuild:sale:${sale.id}`,
+            documentVersion: Math.max(1, sale.stockVersion),
+            documentDate: sale.saleDate,
+            notes: `Bán hàng - ${sale.code} (${soldProduct.name} → ${ingredientProduct.name})`,
+          });
+        }
+        continue;
+      }
+
+      const stockProductId = soldProduct.linkedStockId || soldProduct.id;
+      const stockProduct = productById.get(stockProductId);
+      if (!stockProduct) {
+        throw new Error(`Sản phẩm kho liên kết của ${soldProduct.code} không tồn tại`);
+      }
       events.push({
-        productId: item.productId,
-        productCode: item.product.code,
-        productName: item.product.name,
+        productId: stockProductId,
+        productCode: stockProduct.code,
+        productName: stockProduct.name,
         eventAt: sale.saleDate,
         sourceCreatedAt: sale.createdAt,
         sourceId: sale.id,
         sourceCode: sale.code,
         itemId: item.id,
         type: 'sale',
-        quantity,
-        notes: `Bán hàng - ${sale.code}`,
+        quantity: round2(-quantity),
+        referenceId: sale.id,
+        operationId: `rebuild:sale:${sale.id}`,
+        documentVersion: Math.max(1, sale.stockVersion),
+        documentDate: sale.saleDate,
+        notes: `Bán hàng - ${sale.code}${soldProduct.linkedStockId ? ` (${soldProduct.name} → ${stockProduct.name})` : ''}`,
       });
     }
+  }
+
+  for (const adjustment of adjustments) {
+    const product = productById.get(adjustment.productId);
+    if (!product) continue;
+    events.push({
+      productId: adjustment.productId,
+      productCode: product.code,
+      productName: product.name,
+      eventAt: adjustment.createdAt,
+      sourceCreatedAt: adjustment.createdAt,
+      sourceId: adjustment.id,
+      sourceCode: 'KIỂM KÊ',
+      itemId: adjustment.id,
+      type: 'adjustment',
+      quantity: round2(Number(adjustment.quantity)),
+      referenceId: adjustment.referenceId,
+      operationId: adjustment.operationId || `rebuild:adjustment:${adjustment.id}`,
+      documentVersion: adjustment.documentVersion,
+      documentDate: adjustment.documentDate,
+      notes: adjustment.notes || 'Điều chỉnh kiểm kê',
+    });
   }
 
   events.sort(compareEvents);
 
-  const eventsByProduct = new Map<string, StockEvent[]>();
+  const movementData: Prisma.StockMovementCreateManyInput[] = [];
+  const activeNegativeIntervals = new Map<string, NegativeInterval>();
+  const negativeIntervals: NegativeInterval[] = [];
+
   for (const event of events) {
-    const existing = eventsByProduct.get(event.productId) || [];
-    existing.push(event);
-    eventsByProduct.set(event.productId, existing);
-  }
+    const stockBefore = finalStockByProduct.get(event.productId) || 0;
+    const stockAfter = round2(stockBefore + event.quantity);
+    finalStockByProduct.set(event.productId, stockAfter);
 
-  const movementData: Array<{
-    productId: string;
-    type: string;
-    quantity: number;
-    stockAfter: number;
-    referenceId: string;
-    notes: string;
-    createdAt: Date;
-  }> = [];
+    movementData.push({
+      productId: event.productId,
+      type: event.type,
+      quantity: event.quantity,
+      stockBefore,
+      stockAfter,
+      referenceId: event.referenceId,
+      operationId: event.operationId,
+      documentVersion: event.documentVersion,
+      documentDate: event.documentDate,
+      notes: event.notes,
+      createdAt: event.eventAt,
+    });
 
-  const negativeSnapshots: Array<{
-    productCode: string;
-    productName: string;
-    referenceId: string;
-    stockAfter: number;
-  }> = [];
-
-  for (const product of products) {
-    let runningStock = 0;
-    const productEvents = eventsByProduct.get(product.id) || [];
-    const timestampCount = new Map<number, number>();
-
-    for (const event of productEvents) {
-      runningStock = round2(runningStock + event.quantity);
-      const timestampKey = event.eventAt.getTime();
-      const indexInTimestamp = timestampCount.get(timestampKey) || 0;
-      timestampCount.set(timestampKey, indexInTimestamp + 1);
-
-      if (runningStock < 0) {
-        negativeSnapshots.push({
-          productCode: event.productCode,
-          productName: event.productName,
-          referenceId: event.sourceId,
-          stockAfter: runningStock,
-        });
-      }
-
-      movementData.push({
-        productId: event.productId,
-        type: event.type,
-        quantity: event.quantity,
-        stockAfter: runningStock,
-        referenceId: event.sourceId,
-        notes: event.notes,
-        createdAt: withDeterministicTimestamp(event, indexInTimestamp),
-      });
+    let interval = activeNegativeIntervals.get(event.productId);
+    if (stockAfter < 0 && !interval) {
+      const product = productById.get(event.productId)!;
+      interval = {
+        productCode: event.productCode,
+        productName: event.productName,
+        unit: product.unit,
+        startCode: event.sourceCode,
+        startAt: event.eventAt,
+        lowestStock: stockAfter,
+        lowestCode: event.sourceCode,
+        endCode: null,
+        endAt: null,
+        endingStock: null,
+      };
+      activeNegativeIntervals.set(event.productId, interval);
+    } else if (stockAfter < 0 && interval && stockAfter < interval.lowestStock) {
+      interval.lowestStock = stockAfter;
+      interval.lowestCode = event.sourceCode;
     }
 
-    finalStockByProduct.set(product.id, runningStock);
+    if (stockAfter >= 0 && interval) {
+      interval.endCode = event.sourceCode;
+      interval.endAt = event.eventAt;
+      interval.endingStock = stockAfter;
+      negativeIntervals.push(interval);
+      activeNegativeIntervals.delete(event.productId);
+    }
   }
+
+  negativeIntervals.push(...Array.from(activeNegativeIntervals.values()));
 
   const changedProducts = products
     .map((product) => {
@@ -188,52 +278,43 @@ async function main() {
         diff: round2(rebuiltStock - currentStock),
       };
     })
-    .filter((row) => Math.abs(row.diff) > 0.0001);
+    .filter((row) => Math.abs(row.diff) > 0.005);
 
-  console.log('=== Rebuild stock ledger from sales + purchases ===');
+  console.log('=== Rebuild continuous stock ledger ===');
   console.log(`Mode: ${apply ? 'APPLY' : 'DRY-RUN'}`);
   console.log(`Products: ${products.length}`);
   console.log(`Completed purchases: ${purchases.length}`);
   console.log(`Completed sales: ${sales.length}`);
-  console.log(`Existing stock_movements: ${existingMovementCount}`);
-  console.log(`New stock_movements from history: ${movementData.length}`);
-  console.log(`Products with changed stock: ${changedProducts.length}`);
+  console.log(`Manual adjustments kept: ${adjustments.length}`);
+  console.log(`Existing stock movements: ${existingMovementCount}`);
+  console.log(`Rebuilt stock movements: ${movementData.length}`);
+  console.log(`Products with changed final stock: ${changedProducts.length}`);
 
-  if (changedProducts.length > 0) {
-    console.log('\nChanged stock preview:');
-    for (const row of changedProducts.slice(0, 30)) {
-      console.log(
-        `${row.code} ${row.name}: current=${row.currentStock} rebuilt=${row.rebuiltStock} diff=${row.diff}`
-      );
-    }
-    if (changedProducts.length > 30) {
-      console.log(`... and ${changedProducts.length - 30} more`);
-    }
+  for (const row of changedProducts) {
+    console.log(
+      `${row.code} ${row.name}: current=${row.currentStock} rebuilt=${row.rebuiltStock} diff=${row.diff}`
+    );
   }
 
-  if (negativeSnapshots.length > 0) {
-    console.log('\nWarning: some products go negative during the rebuilt timeline:');
-    for (const row of negativeSnapshots.slice(0, 20)) {
-      console.log(`${row.productCode} ${row.productName}: reference=${row.referenceId} stockAfter=${row.stockAfter}`);
-    }
-    if (negativeSnapshots.length > 20) {
-      console.log(`... and ${negativeSnapshots.length - 20} more`);
-    }
+  console.log(`Negative stock intervals kept: ${negativeIntervals.length}`);
+  for (const interval of negativeIntervals) {
+    console.log(
+      `${interval.productCode} ${interval.productName}: ` +
+      `${interval.startCode} -> min=${interval.lowestStock} at ${interval.lowestCode} -> ` +
+      `${interval.endCode || 'chưa hết âm'}${interval.endingStock === null ? '' : ` (${interval.endingStock})`}`
+    );
   }
 
   if (!apply) {
-    console.log('\nDry-run only. Run with --apply to rewrite stock_movements and products.stock.');
+    console.log('\nDry-run only. Run with --apply to replace the stock ledger and product stock.');
     return;
   }
 
   await prisma.$transaction(
     async (tx) => {
       await tx.stockMovement.deleteMany();
-
       if (movementData.length > 0) {
-        await tx.stockMovement.createMany({
-          data: movementData,
-        });
+        await tx.stockMovement.createMany({ data: movementData });
       }
 
       for (const product of products) {
@@ -242,8 +323,21 @@ async function main() {
           data: { stock: finalStockByProduct.get(product.id) || 0 },
         });
       }
+
+      await tx.sale.updateMany({
+        where: { status: 'completed' },
+        data: { stockVersion: 1 },
+      });
+      await tx.sale.updateMany({
+        where: { status: { not: 'completed' } },
+        data: { stockVersion: 0 },
+      });
+      await tx.purchase.updateMany({
+        where: { status: 'completed' },
+        data: { stockVersion: 1 },
+      });
     },
-    { maxWait: 20_000, timeout: 60_000 }
+    { maxWait: 20_000, timeout: 120_000 }
   );
 
   console.log('\nApplied successfully.');
