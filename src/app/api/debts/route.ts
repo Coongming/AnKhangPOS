@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { recalcCustomerDebt, recalcSupplierDebt } from '@/lib/debt-utils';
+import { reallocateCustomerPayments, recalcCustomerDebt, recalcSupplierDebt } from '@/lib/debt-utils';
 
 // GET - List debt transactions
 export async function GET(request: NextRequest) {
@@ -65,12 +65,12 @@ export async function POST(request: NextRequest) {
         });
 
         await recalcCustomerDebt(tx, entityId);
+        await reallocateCustomerPayments(tx, entityId);
       });
     } else if (type === 'supplier_payment') {
       // Pay supplier
       const supplier = await prisma.supplier.findUnique({ where: { id: entityId } });
       if (!supplier) return NextResponse.json({ error: 'Không tìm thấy nhà cung cấp' }, { status: 404 });
-      if (payAmount > Number(supplier.debt)) return NextResponse.json({ error: 'Số tiền trả vượt quá công nợ' }, { status: 400 });
 
       await prisma.$transaction(async (tx) => {
         await tx.debtTransaction.create({

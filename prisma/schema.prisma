@@ -112,13 +112,11 @@ model Purchase {
   debtAmount    Decimal        @default(0) @map("debt_amount") @db.Decimal(15, 0) // Còn nợ
   notes         String?
   status        String         @default("completed") // completed, cancelled
-  type          String         @default("purchase")   // purchase = nhập, return = trả
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
 
   supplier      Supplier       @relation(fields: [supplierId], references: [id])
   items         PurchaseItem[]
-  debtTransactions DebtTransaction[]
 
   @@index([supplierId])
   @@index([purchaseDate])
@@ -167,7 +165,7 @@ model Sale {
   customer           Customer?  @relation(fields: [customerId], references: [id])
   deliveryEmployee   Employee?  @relation(fields: [deliveryEmployeeId], references: [id])
   items              SaleItem[]
-  debtTransactions   DebtTransaction[]
+  paymentAllocations CustomerPaymentAllocation[]
 
   @@index([customerId])
   @@index([saleDate])
@@ -205,8 +203,6 @@ model DebtTransaction {
   type        String    // customer_debt, customer_payment, supplier_debt, supplier_payment
   customerId  String?   @map("customer_id")
   supplierId  String?   @map("supplier_id")
-  saleId      String?   @map("sale_id")
-  purchaseId  String?   @map("purchase_id")
   amount      Decimal   @db.Decimal(15, 0) // Số tiền (dương = phát sinh nợ, âm = trả nợ)
   balanceAfter Decimal  @map("balance_after") @db.Decimal(15, 0) // Số dư sau giao dịch
   notes       String?
@@ -215,16 +211,30 @@ model DebtTransaction {
 
   customer    Customer? @relation(fields: [customerId], references: [id])
   supplier    Supplier? @relation(fields: [supplierId], references: [id])
-  sale        Sale?     @relation(fields: [saleId], references: [id])
-  purchase    Purchase? @relation(fields: [purchaseId], references: [id])
+  paymentAllocations CustomerPaymentAllocation[]
 
   @@index([customerId])
   @@index([supplierId])
-  @@index([saleId])
-  @@index([purchaseId])
   @@index([type])
   @@index([createdAt])
   @@map("debt_transactions")
+}
+
+// Phân bổ một khoản khách trả vào các hóa đơn theo thứ tự cũ nhất trước.
+// Khoản thu gốc vẫn độc lập để sửa/xóa hóa đơn không làm mất lịch sử nhận tiền.
+model CustomerPaymentAllocation {
+  id            String   @id @default(cuid())
+  transactionId String   @map("transaction_id")
+  saleId        String   @map("sale_id")
+  amount        Decimal  @db.Decimal(15, 0)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  transaction   DebtTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  sale          Sale            @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@unique([transactionId, saleId])
+  @@index([saleId])
+  @@map("customer_payment_allocations")
 }
 
 // ============================================
@@ -233,7 +243,7 @@ model DebtTransaction {
 model StockMovement {
   id          String   @id @default(cuid())
   productId   String   @map("product_id")
-  type        String   // purchase, sale, sale_cancel, purchase_cancel, adjustment
+  type        String   // purchase, sale, sale_cancel, purchase_cancel, *_reverse, adjustment
   quantity    Decimal  @db.Decimal(15, 2) // Dương = nhập, Âm = xuất
   stockAfter  Decimal  @map("stock_after") @db.Decimal(15, 2) // Tồn kho sau biến động
   referenceId String?  @map("reference_id") // ID phiếu nhập/hóa đơn

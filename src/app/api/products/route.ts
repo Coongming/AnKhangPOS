@@ -37,13 +37,15 @@ export async function GET(request: NextRequest) {
     if (linkedIds.length > 0) {
       const linkedProducts = await prisma.product.findMany({
         where: { id: { in: linkedIds } },
-        select: { id: true, stock: true },
+        select: { id: true, stock: true, costPrice: true },
       });
-      const linkedStockMap = new Map(linkedProducts.map((p) => [p.id, p.stock]));
+      const linkedStockMap = new Map(linkedProducts.map((p) => [p.id, { stock: p.stock, costPrice: p.costPrice }]));
 
       for (const product of products) {
         if (product.linkedStockId && linkedStockMap.has(product.linkedStockId)) {
-          product.stock = linkedStockMap.get(product.linkedStockId)!;
+          const linkedProduct = linkedStockMap.get(product.linkedStockId)!;
+          product.stock = linkedProduct.stock;
+          product.costPrice = linkedProduct.costPrice;
         }
       }
     }

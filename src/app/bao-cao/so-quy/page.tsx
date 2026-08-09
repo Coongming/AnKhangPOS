@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { Wallet, ArrowDownCircle, ArrowUpCircle, TrendingUp } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency } from '@/lib/utils';
@@ -29,23 +29,16 @@ export default function CashflowReportPage() {
   const { showToast } = useToast();
   const [data, setData] = useState<CashflowData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState('month');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ type: 'cashflow', period });
-      if (dateFrom) params.set('dateFrom', dateFrom);
-      if (dateTo) params.set('dateTo', dateTo);
-      const res = await fetch(`/api/reports?${params}`);
-      setData(await res.json());
-    } catch { showToast('error', 'Lỗi tải báo cáo'); }
-    finally { setLoading(false); }
-  }, [period, dateFrom, dateTo, showToast]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/reports?type=cashflow&period=all');
+        setData(await res.json());
+      } catch { showToast('error', 'Lỗi tải báo cáo'); }
+      finally { setLoading(false); }
+    })();
+  }, [showToast]);
 
   const Row = ({ label, value, color, bold, indent }: { label: string; value: number; color?: string; bold?: boolean; indent?: boolean }) => (
     <div style={{
@@ -66,28 +59,40 @@ export default function CashflowReportPage() {
       <div style={{ marginBottom: 24 }}>
         <h2 style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-heading)' }}>
           <Wallet size={22} style={{ display: 'inline', marginRight: 8, verticalAlign: -4 }} />
-          Sổ quỹ (Dòng tiền)
+          Sổ quỹ
         </h2>
-      </div>
-
-      <div className="toolbar">
-        <div className="toolbar-left">
-          {['all', 'day', 'week', 'month', 'year'].map((p) => (
-            <button key={p} className={`btn ${period === p ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setPeriod(p); setDateFrom(''); setDateTo(''); }}>
-              {{ all: 'Tất cả', day: 'Hôm nay', week: '7 ngày', month: 'Tháng', year: 'Năm' }[p]}
-            </button>
-          ))}
-          <span className="text-muted" style={{ margin: '0 8px' }}>|</span>
-          <input className="form-input" type="date" style={{ width: 145 }} value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPeriod('custom'); }} />
-          <span className="text-muted">đến</span>
-          <input className="form-input" type="date" style={{ width: 145 }} value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPeriod('custom'); }} />
-        </div>
+        <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>Tổng hợp toàn bộ dòng tiền từ khi hoạt động đến hiện tại</p>
       </div>
 
       {loading ? <div className="loading-page"><div className="loading-spinner" /></div> : data && (
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           {/* Left: Cashflow summary */}
           <div style={{ flex: 1, minWidth: 350 }}>
+            {/* SỐ DƯ HIỆN TẠI — đặt lên đầu */}
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', padding: '20px 24px',
+                background: data.balance >= 0 ? 'var(--success-bg)' : 'var(--danger-bg)',
+                borderRadius: 'var(--radius-md)',
+                borderLeft: '5px solid',
+                borderLeftColor: data.balance >= 0 ? 'var(--success)' : 'var(--danger)',
+              }}>
+                <span style={{ fontWeight: 800, fontSize: 18 }}>
+                  <TrendingUp size={20} style={{ display: 'inline', marginRight: 8, verticalAlign: -4 }} />
+                  SỐ DƯ HIỆN TẠI
+                </span>
+                <span style={{
+                  fontWeight: 800, fontSize: 24,
+                  color: data.balance >= 0 ? 'var(--success)' : 'var(--danger)',
+                }}>
+                  {data.balance < 0 ? '- ' : ''}{formatCurrency(Math.abs(data.balance))}
+                </span>
+              </div>
+              <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-muted)' }}>
+                = Tổng tiền vào ({formatCurrency(data.moneyIn.total)}) - Tổng tiền ra ({formatCurrency(data.moneyOut.total)})
+              </div>
+            </div>
+
             {/* TIỀN VÀO */}
             <div className="card" style={{ marginBottom: 16 }}>
               <div className="card-header">
@@ -99,7 +104,6 @@ export default function CashflowReportPage() {
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <Row label="💵 Bán hàng (tiền mặt)" value={data.moneyIn.cashSales} indent />
                 <Row label="🏦 Bán hàng (chuyển khoản)" value={data.moneyIn.transferSales} indent />
-                <Row label="💳 Khách trả nợ" value={data.moneyIn.customerPayments} indent />
                 {data.moneyIn.capitalDeposits > 0 && (
                   <Row label="💰 Nộp thêm vốn" value={data.moneyIn.capitalDeposits} indent />
                 )}
@@ -127,31 +131,6 @@ export default function CashflowReportPage() {
                 )}
                 <div style={{ borderTop: '2px solid var(--danger)', margin: '4px 16px 0' }} />
                 <Row label="Tổng tiền ra" value={data.moneyOut.total} color="var(--danger)" bold />
-              </div>
-            </div>
-
-            {/* SỐ DƯ */}
-            <div className="card">
-              <div style={{
-                display: 'flex', justifyContent: 'space-between', padding: '20px 24px',
-                background: data.balance >= 0 ? 'var(--success-bg)' : 'var(--danger-bg)',
-                borderRadius: 'var(--radius-md)',
-                borderLeft: '5px solid',
-                borderLeftColor: data.balance >= 0 ? 'var(--success)' : 'var(--danger)',
-              }}>
-                <span style={{ fontWeight: 800, fontSize: 18 }}>
-                  <TrendingUp size={20} style={{ display: 'inline', marginRight: 8, verticalAlign: -4 }} />
-                  SỐ DƯ CUỐI KỲ
-                </span>
-                <span style={{
-                  fontWeight: 800, fontSize: 24,
-                  color: data.balance >= 0 ? 'var(--success)' : 'var(--danger)',
-                }}>
-                  {data.balance < 0 ? '- ' : ''}{formatCurrency(Math.abs(data.balance))}
-                </span>
-              </div>
-              <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-muted)' }}>
-                = Tổng tiền vào ({formatCurrency(data.moneyIn.total)}) - Tổng tiền ra ({formatCurrency(data.moneyOut.total)})
               </div>
             </div>
           </div>
@@ -207,7 +186,7 @@ export default function CashflowReportPage() {
             )}
 
             <div style={{ background: 'var(--info-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--info)' }}>
-              💡 Số dư cuối kỳ cho biết <strong>tiền thực tế</strong> còn lại trong quỹ (két sắt + tài khoản). Nếu số dư không khớp → kiểm tra các khoản chưa ghi nhận.
+              💡 Số dư cho biết <strong>tiền thực tế</strong> còn lại trong quỹ (két sắt + tài khoản). Nếu số dư không khớp → kiểm tra các khoản chưa ghi nhận.
             </div>
           </div>
         </div>

@@ -30,7 +30,7 @@ const navGroups = [
     items: [
       { label: 'Bán hàng', href: '/ban-hang', icon: ShoppingCart },
       { label: 'Lịch sử bán hàng', href: '/lich-su-ban-hang', icon: Receipt },
-      { label: 'Nhập/Trả hàng', href: '/nhap-hang', icon: ClipboardList },
+      { label: 'Nhập hàng', href: '/nhap-hang', icon: ClipboardList },
       { label: 'Công nợ', href: '/cong-no', icon: Wallet },
       { label: 'Chi phí', href: '/chi-phi', icon: DollarSign },
       { label: 'Trộn gạo', href: '/tron-gao', icon: Beaker },

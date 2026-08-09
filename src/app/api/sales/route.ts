@@ -1,9 +1,126 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { generateCode, generateCodeInTx } from '@/lib/utils';
-import { checkStockForProduct, deductStockForProduct, reverseStockForProduct } from '@/lib/stock-operations';
-import { recalcCustomerDebt } from '@/lib/debt-utils';
-import { validateNumber, validatePositiveNumber, isValidationError } from '@/lib/validation';
+import { generateCodeInTx } from '@/lib/utils';
+import {
+  calculateSaleCostPrice,
+  checkStockForProduct,
+  deductStockForProduct,
+  getRecordedStockImpact,
+  reverseRecordedStockImpact,
+  reverseStockForProduct,
+} from '@/lib/stock-operations';
+import {
+  reallocateCustomerPayments,
+  recalcCustomerDebt,
+} from '@/lib/debt-utils';
+import {
+  validatePositiveNumber,
+  isValidationError,
+  ValidationError,
+} from '@/lib/validation';
+
+type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+type SaleItemInput = {
+  id?: string;
+  productId: string;
+  quantity: unknown;
+  unitPrice: unknown;
+  discount?: unknown;
+};
+
+type ExistingSaleItem = {
+  id: string;
+  productId: string;
+  costPrice: unknown;
+};
+
+type ProcessedSaleItem = {
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+  costPrice: number;
+  discount: number;
+  totalPrice: number;
+};
+
+function parseDate(value: unknown, fallback: Date): Date {
+  if (!value) return fallback;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) {
+    throw new ValidationError('Ngày hóa đơn không hợp lệ');
+  }
+  return date;
+}
+
+async function processSaleItems(
+  tx: TxClient,
+  items: SaleItemInput[],
+  oldItems: ExistingSaleItem[] = []
+): Promise<{ items: ProcessedSaleItem[]; subtotal: number; totalCost: number }> {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new ValidationError('Vui lòng thêm sản phẩm vào đơn hàng');
+  }
+
+  const oldById = new Map(oldItems.map((item) => [item.id, item]));
+  const oldByProductId = new Map(oldItems.map((item) => [item.productId, item]));
+  const processedItems: ProcessedSaleItem[] = [];
+  let subtotal = 0;
+  let totalCost = 0;
+
+  for (const item of items) {
+    if (!item.productId) throw new ValidationError('Sản phẩm không hợp lệ');
+
+    const quantity = validatePositiveNumber(item.quantity, 'Số lượng');
+    const unitPrice = validatePositiveNumber(item.unitPrice, 'Đơn giá');
+    const itemDiscount = validatePositiveNumber(item.discount || 0, 'Chiết khấu');
+    if (quantity <= 0) throw new ValidationError('Số lượng phải lớn hơn 0');
+
+    const totalPrice = quantity * unitPrice - itemDiscount;
+    if (totalPrice < 0) {
+      throw new ValidationError('Chiết khấu dòng không được lớn hơn thành tiền');
+    }
+
+    const oldItem =
+      (item.id ? oldById.get(item.id) : undefined) ||
+      oldByProductId.get(item.productId);
+    const keepsHistoricalCost = oldItem?.productId === item.productId;
+    const costPrice = keepsHistoricalCost
+      ? Number(oldItem.costPrice)
+      : Math.round(await calculateSaleCostPrice(tx, item.productId));
+
+    subtotal += totalPrice;
+    totalCost += quantity * costPrice;
+    processedItems.push({
+      productId: item.productId,
+      quantity,
+      unitPrice,
+      costPrice,
+      discount: itemDiscount,
+      totalPrice,
+    });
+  }
+
+  return { items: processedItems, subtotal, totalCost };
+}
+
+async function refreshCustomerDebt(
+  tx: TxClient,
+  customerIds: Array<string | null | undefined>
+): Promise<void> {
+  const uniqueIds = Array.from(new Set(customerIds.filter((id): id is string => Boolean(id))));
+  for (const customerId of uniqueIds) {
+    await recalcCustomerDebt(tx, customerId);
+    await reallocateCustomerPayments(tx, customerId);
+  }
+}
+
+async function getAllowNegativeStock(): Promise<boolean> {
+  const setting = await prisma.systemSetting.findUnique({
+    where: { key: 'allow_negative_stock' },
+  });
+  return setting?.value === 'true';
+}
 
 // GET - List sales
 export async function GET(request: NextRequest) {
@@ -21,7 +138,10 @@ export async function GET(request: NextRequest) {
     if (paymentMethod) where.paymentMethod = paymentMethod;
     if (dateFrom || dateTo) {
       where.saleDate = {};
-      if (dateFrom) (where.saleDate as Record<string, unknown>).gte = new Date(dateFrom + 'T00:00:00+07:00');
+      if (dateFrom) {
+        (where.saleDate as Record<string, unknown>).gte =
+          new Date(dateFrom + 'T00:00:00+07:00');
+      }
       if (dateTo) {
         const to = new Date(dateTo + 'T00:00:00+07:00');
         to.setDate(to.getDate() + 1);
@@ -34,92 +154,90 @@ export async function GET(request: NextRequest) {
       include: {
         customer: { select: { name: true, code: true, phone: true } },
         deliveryEmployee: { select: { name: true, code: true } },
-        items: { include: { product: { select: { name: true, code: true, unit: true } } } },
+        items: {
+          include: {
+            product: { select: { name: true, code: true, unit: true } },
+          },
+        },
+        paymentAllocations: { select: { amount: true } },
       },
-      orderBy: { saleDate: 'desc' },
+      orderBy: [{ saleDate: 'desc' }, { createdAt: 'desc' }],
     });
-    return NextResponse.json(sales);
+
+    return NextResponse.json(sales.map((sale) => {
+      const allocated = sale.paymentAllocations.reduce(
+        (sum, allocation) => sum + Number(allocation.amount),
+        0
+      );
+      const { paymentAllocations, ...data } = sale;
+      return {
+        ...data,
+        remainingDebt: Math.max(0, Number(sale.debtAmount) - allocated),
+      };
+    }));
   } catch (error) {
     console.error('Sales GET error:', error);
     return NextResponse.json({ error: 'Lỗi tải hóa đơn' }, { status: 500 });
   }
 }
 
-// POST - Create sale (TRANSACTION: create sale + deduct stock + record debt)
+// POST - Create sale
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { customerId, items, paidAmount, discount, notes, paymentMethod, deliveryEmployeeId, status } = body;
-
-    if (!items || items.length === 0) {
-      return NextResponse.json({ error: 'Vui lòng thêm sản phẩm vào đơn hàng' }, { status: 400 });
-    }
+    const {
+      customerId,
+      items,
+      paidAmount,
+      discount,
+      notes,
+      paymentMethod,
+      deliveryEmployeeId,
+      status,
+    } = body;
 
     const isPending = status === 'pending';
-
-    // Code generation moved inside transaction to prevent race condition
-
-    // Check system setting for negative stock
-    const allowNegStock = await prisma.systemSetting.findUnique({
-      where: { key: 'allow_negative_stock' },
-    });
-    const allowNegative = allowNegStock?.value === 'true';
+    const allowNegative = await getAllowNegativeStock();
 
     const sale = await prisma.$transaction(async (tx) => {
-      // Generate sale code inside transaction to prevent race condition
       const code = await generateCodeInTx(tx, 'HD', 'sale');
+      const processed = await processSaleItems(tx, items);
 
-      // Pre-check stock (skip for pending)
       if (!isPending) {
-        for (const item of items) {
-          await checkStockForProduct(tx, item.productId, parseFloat(item.quantity), allowNegative);
+        for (const item of processed.items) {
+          await checkStockForProduct(
+            tx,
+            item.productId,
+            item.quantity,
+            allowNegative
+          );
         }
       }
 
-      // Calculate totals
-      let subtotal = 0;
-      let totalCost = 0;
-      const processedItems = [];
-
-      for (const item of items) {
-        const qty = validatePositiveNumber(item.quantity, 'Số lượng');
-        const price = validatePositiveNumber(item.unitPrice, 'Đơn giá');
-        const itemDiscount = validateNumber(item.discount || 0, 'Chiết khấu');
-        const lineTotal = qty * price - itemDiscount;
-        const product = await tx.product.findUnique({ where: { id: item.productId } });
-        if (!product) throw new Error(`Sản phẩm không tồn tại: ${item.productId}`);
-
-        subtotal += lineTotal;
-        totalCost += qty * Number(product.costPrice);
-        processedItems.push({
-          productId: item.productId,
-          quantity: qty,
-          unitPrice: price,
-          costPrice: product.costPrice,
-          discount: itemDiscount,
-          totalPrice: lineTotal,
-        });
+      const orderDiscount = validatePositiveNumber(discount || 0, 'Giảm giá hóa đơn');
+      const totalAmount = processed.subtotal - orderDiscount;
+      if (totalAmount < 0) {
+        throw new ValidationError('Giảm giá hóa đơn không được lớn hơn tạm tính');
       }
 
-      const orderDiscount = parseFloat(discount) || 0;
-      const totalAmount = subtotal - orderDiscount;
-      const paid = isPending ? 0 : (parseFloat(paidAmount) || 0);
+      const paid = isPending
+        ? 0
+        : validatePositiveNumber(paidAmount || 0, 'Số tiền thanh toán');
       const debtAmount = isPending ? 0 : Math.max(0, totalAmount - paid);
+      const selectedCustomerId = customerId || null;
 
-      // Debt requires customer
-      if (!isPending && debtAmount > 0 && !customerId) {
-        throw new Error('Bán nợ phải chọn khách hàng có hồ sơ');
+      if (!isPending && debtAmount > 0 && !selectedCustomerId) {
+        throw new ValidationError('Bán nợ phải chọn khách hàng có hồ sơ');
       }
 
-      // 1. Create sale
       const newSale = await tx.sale.create({
         data: {
           code,
-          customerId: customerId || null,
-          subtotal,
+          customerId: selectedCustomerId,
+          subtotal: processed.subtotal,
           discount: orderDiscount,
           totalAmount,
-          totalCost,
+          totalCost: processed.totalCost,
           paidAmount: paid,
           debtAmount,
           notes: notes || null,
@@ -129,20 +247,25 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      // 2. Create sale items + deduct stock
-      for (const item of processedItems) {
+      for (const item of processed.items) {
         await tx.saleItem.create({
           data: { saleId: newSale.id, ...item },
         });
 
         if (!isPending) {
-          await deductStockForProduct(tx, item.productId, item.quantity, newSale.id, `Bán hàng - ${code}`, allowNegative);
+          await deductStockForProduct(
+            tx,
+            item.productId,
+            item.quantity,
+            newSale.id,
+            `Bán hàng - ${code}`,
+            allowNegative
+          );
         }
       }
 
-      // 3. Customer debt (skip cho pending) — tính lại từ nguồn
-      if (!isPending && customerId) {
-        await recalcCustomerDebt(tx, customerId);
+      if (!isPending) {
+        await refreshCustomerDebt(tx, [selectedCustomerId]);
       }
 
       return newSale;
@@ -151,167 +274,222 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(sale, { status: 201 });
   } catch (error) {
     console.error('Sales POST error:', error);
-    if (isValidationError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
-    }
     const message = error instanceof Error ? error.message : 'Lỗi tạo hóa đơn';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: message },
+      { status: isValidationError(error) ? 400 : 500 }
+    );
   }
 }
 
-// PUT - Full edit sale OR Complete/delete pending sale
+// PUT - Edit, complete or delete a pending sale
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
     const { id, action } = body;
+    if (!id) {
+      return NextResponse.json({ error: 'Thiếu ID hóa đơn' }, { status: 400 });
+    }
 
-    // --- Full edit ---
     if (action === 'edit') {
-      const { saleDate, notes, customerId, paymentMethod, items, discount, paidAmount } = body;
+      const {
+        saleDate,
+        notes,
+        customerId,
+        paymentMethod,
+        items,
+        discount,
+        paidAmount,
+      } = body;
 
       const sale = await prisma.sale.findUnique({
         where: { id },
         include: { items: true },
       });
-      if (!sale) return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
-      if (sale.status === 'cancelled') return NextResponse.json({ error: 'Không thể sửa hóa đơn đã hủy' }, { status: 400 });
+      if (!sale) {
+        return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
+      }
+      if (sale.status === 'cancelled') {
+        return NextResponse.json(
+          { error: 'Không thể sửa hóa đơn đã hủy' },
+          { status: 400 }
+        );
+      }
 
-      // If only simple fields (no items), do simple update
       if (!items) {
-        const updateData: Record<string, unknown> = {};
-        if (saleDate) updateData.saleDate = new Date(saleDate);
-        if (notes !== undefined) updateData.notes = notes || null;
-        if (customerId !== undefined) updateData.customerId = customerId || null;
-        if (paymentMethod) updateData.paymentMethod = paymentMethod;
-        await prisma.sale.update({ where: { id }, data: updateData });
+        const newCustomerId =
+          customerId === undefined ? sale.customerId : (customerId || null);
+        if (sale.status === 'completed' && Number(sale.debtAmount) > 0 && !newCustomerId) {
+          return NextResponse.json(
+            { error: 'Bán nợ phải chọn khách hàng' },
+            { status: 400 }
+          );
+        }
+
+        await prisma.$transaction(async (tx) => {
+          await tx.sale.update({
+            where: { id },
+            data: {
+              saleDate: parseDate(saleDate, sale.saleDate),
+              notes: notes === undefined ? sale.notes : (notes || null),
+              customerId: newCustomerId,
+              paymentMethod: paymentMethod || sale.paymentMethod,
+            },
+          });
+          if (sale.status === 'completed') {
+            await refreshCustomerDebt(tx, [sale.customerId, newCustomerId]);
+          }
+        });
+
         return NextResponse.json({ success: true });
       }
 
-      // Check system setting for negative stock
-      const allowNegStock = await prisma.systemSetting.findUnique({
-        where: { key: 'allow_negative_stock' },
-      });
-      const allowNegative = allowNegStock?.value === 'true';
+      const allowNegative = await getAllowNegativeStock();
 
-      // Full edit with items → reverse old + apply new in transaction
       await prisma.$transaction(async (tx) => {
-        // 1. REVERSE old stock
-        for (const oldItem of sale.items) {
-          await reverseStockForProduct(tx, oldItem.productId, Number(oldItem.quantity), id, `Sửa HĐ (hoàn kho) - ${sale.code}`);
+        if (sale.status === 'completed') {
+          const stockImpact = await getRecordedStockImpact(tx, id);
+          const reversedFromMovements = await reverseRecordedStockImpact(
+            tx,
+            stockImpact,
+            id,
+            'sale_edit_reverse',
+            `Sửa HĐ (hoàn kho) - ${sale.code}`
+          );
+
+          if (!reversedFromMovements) {
+            for (const oldItem of sale.items) {
+              await reverseStockForProduct(
+                tx,
+                oldItem.productId,
+                Number(oldItem.quantity),
+                id,
+                `Sửa HĐ (hoàn kho) - ${sale.code}`
+              );
+            }
+          }
         }
 
-        // 2. Delete old items & related records (debt sẽ tính lại ở cuối)
-        await tx.debtTransaction.deleteMany({ where: { saleId: id } });
-        await tx.stockMovement.deleteMany({ where: { referenceId: id } });
+        const processed = await processSaleItems(tx, items, sale.items);
+        if (sale.status === 'completed') {
+          for (const item of processed.items) {
+            await checkStockForProduct(
+              tx,
+              item.productId,
+              item.quantity,
+              allowNegative
+            );
+          }
+        }
+
+        const orderDiscount = validatePositiveNumber(
+          discount || 0,
+          'Giảm giá hóa đơn'
+        );
+        const totalAmount = processed.subtotal - orderDiscount;
+        if (totalAmount < 0) {
+          throw new ValidationError('Giảm giá hóa đơn không được lớn hơn tạm tính');
+        }
+
+        const isPending = sale.status === 'pending';
+        const paid = isPending
+          ? 0
+          : validatePositiveNumber(paidAmount || 0, 'Số tiền thanh toán');
+        const debtAmount = isPending ? 0 : Math.max(0, totalAmount - paid);
+        const newCustomerId =
+          customerId === undefined ? sale.customerId : (customerId || null);
+
+        if (!isPending && debtAmount > 0 && !newCustomerId) {
+          throw new ValidationError('Bán nợ phải chọn khách hàng');
+        }
+
         await tx.saleItem.deleteMany({ where: { saleId: id } });
-
-        // 4. Re-calculate new totals
-        let subtotal = 0;
-        let totalCost = 0;
-        const processedItems = [];
-
-        for (const item of items) {
-          const qty = parseFloat(item.quantity);
-          const price = parseFloat(item.unitPrice);
-          const itemDiscount = parseFloat(item.discount) || 0;
-          const lineTotal = qty * price - itemDiscount;
-          const product = await tx.product.findUnique({ where: { id: item.productId } });
-          if (!product) throw new Error('Sản phẩm không tồn tại');
-
-          // Check stock
-          await checkStockForProduct(tx, item.productId, qty, allowNegative);
-
-          subtotal += lineTotal;
-          totalCost += qty * Number(product.costPrice);
-          processedItems.push({
-            productId: item.productId,
-            quantity: qty,
-            unitPrice: price,
-            costPrice: product.costPrice,
-            discount: itemDiscount,
-            totalPrice: lineTotal,
-          });
-        }
-
-        const orderDiscount = parseFloat(discount) || 0;
-        const totalAmount = subtotal - orderDiscount;
-        const paid = parseFloat(paidAmount) || 0;
-        const newDebtAmount = Math.max(0, totalAmount - paid);
-        const newCustomerId = customerId || null;
-
-        if (newDebtAmount > 0 && !newCustomerId) {
-          throw new Error('Bán nợ phải chọn khách hàng');
-        }
-
-        // 5. Update sale
         await tx.sale.update({
           where: { id },
           data: {
             customerId: newCustomerId,
-            saleDate: saleDate ? new Date(saleDate) : sale.saleDate,
-            subtotal,
+            saleDate: parseDate(saleDate, sale.saleDate),
+            subtotal: processed.subtotal,
             discount: orderDiscount,
             totalAmount,
-            totalCost,
+            totalCost: processed.totalCost,
             paidAmount: paid,
-            debtAmount: newDebtAmount,
-            notes: notes !== undefined ? (notes || null) : sale.notes,
-            paymentMethod: paymentMethod || sale.paymentMethod,
+            debtAmount,
+            notes: notes === undefined ? sale.notes : (notes || null),
+            paymentMethod: isPending ? 'cash' : (paymentMethod || sale.paymentMethod),
           },
         });
 
-        // 6. Create new items + deduct stock
-        for (const item of processedItems) {
+        for (const item of processed.items) {
           await tx.saleItem.create({
             data: { saleId: id, ...item },
           });
 
-          await deductStockForProduct(tx, item.productId, item.quantity, id, `Sửa hóa đơn - ${sale.code}`, allowNegative);
+          if (!isPending) {
+            await deductStockForProduct(
+              tx,
+              item.productId,
+              item.quantity,
+              id,
+              `Sửa hóa đơn - ${sale.code}`,
+              allowNegative
+            );
+          }
         }
 
-        // 7. Recalc debt — tính lại từ nguồn
-        // Nếu đổi khách hàng, cần tính lại cả khách cũ
-        if (sale.customerId && sale.customerId !== newCustomerId) {
-          await recalcCustomerDebt(tx, sale.customerId);
-        }
-        if (newCustomerId) {
-          await recalcCustomerDebt(tx, newCustomerId);
+        if (!isPending) {
+          await refreshCustomerDebt(tx, [sale.customerId, newCustomerId]);
         }
       });
 
       return NextResponse.json({ success: true });
     }
 
-    // --- Complete pending sale (trừ kho + ghi nợ + đổi status) ---
     if (action === 'complete') {
       const { paymentMethod, paidAmount, deliveryEmployeeId } = body;
-
       const sale = await prisma.sale.findUnique({
         where: { id },
         include: { items: true },
       });
-      if (!sale) return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
-      if (sale.status !== 'pending') return NextResponse.json({ error: 'Đơn này không phải đơn chờ' }, { status: 400 });
+      if (!sale) {
+        return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
+      }
+      if (sale.status !== 'pending') {
+        return NextResponse.json(
+          { error: 'Đơn này không phải đơn chờ' },
+          { status: 400 }
+        );
+      }
 
-      const allowNegStock = await prisma.systemSetting.findUnique({
-        where: { key: 'allow_negative_stock' },
-      });
-      const allowNegative = allowNegStock?.value === 'true';
+      const allowNegative = await getAllowNegativeStock();
 
       await prisma.$transaction(async (tx) => {
-        // Check stock
+        let totalCost = 0;
+        const currentCosts = new Map<string, number>();
+
         for (const item of sale.items) {
-          await checkStockForProduct(tx, item.productId, Number(item.quantity), allowNegative);
+          await checkStockForProduct(
+            tx,
+            item.productId,
+            Number(item.quantity),
+            allowNegative
+          );
+          const costPrice = Math.round(
+            await calculateSaleCostPrice(tx, item.productId)
+          );
+          currentCosts.set(item.id, costPrice);
+          totalCost += Number(item.quantity) * costPrice;
         }
 
-        const paid = parseFloat(paidAmount) || 0;
+        const paid = validatePositiveNumber(
+          paidAmount || 0,
+          'Số tiền thanh toán'
+        );
         const debtAmount = Math.max(0, Number(sale.totalAmount) - paid);
-
         if (debtAmount > 0 && !sale.customerId) {
-          throw new Error('Bán nợ phải chọn khách hàng');
+          throw new ValidationError('Bán nợ phải chọn khách hàng');
         }
 
-        // 1. Update sale status
         await tx.sale.update({
           where: { id },
           data: {
@@ -319,35 +497,43 @@ export async function PUT(request: NextRequest) {
             paymentMethod: paymentMethod || 'cash',
             paidAmount: paid,
             debtAmount,
+            totalCost,
             deliveryEmployeeId: deliveryEmployeeId || null,
           },
         });
 
-        // 2. Deduct stock
         for (const item of sale.items) {
-          await deductStockForProduct(tx, item.productId, Number(item.quantity), id, `Bán hàng (hoàn thành đơn chờ) - ${sale.code}`, allowNegative);
+          await tx.saleItem.update({
+            where: { id: item.id },
+            data: { costPrice: currentCosts.get(item.id) || 0 },
+          });
+          await deductStockForProduct(
+            tx,
+            item.productId,
+            Number(item.quantity),
+            id,
+            `Bán hàng (hoàn thành đơn chờ) - ${sale.code}`,
+            allowNegative
+          );
         }
 
-        // 3. Customer debt — tính lại từ nguồn
-        if (sale.customerId) {
-          await recalcCustomerDebt(tx, sale.customerId);
-        }
+        await refreshCustomerDebt(tx, [sale.customerId]);
       });
 
       return NextResponse.json({ success: true });
     }
 
-    // --- Delete pending sale ---
     if (action === 'deletePending') {
       const sale = await prisma.sale.findUnique({
         where: { id },
-        include: { items: true },
+        select: { status: true },
       });
-
-      if (!sale) return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
+      if (!sale) {
+        return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
+      }
       if (sale.status !== 'pending') {
         return NextResponse.json(
-          { error: 'Chức năng hủy hóa đơn đã được bỏ. Hãy dùng nút Xóa hóa đơn nếu cần tạo lại đơn.' },
+          { error: 'Chỉ có thể xóa đơn chờ bằng thao tác này' },
           { status: 400 }
         );
       }
@@ -364,47 +550,66 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('Sales PUT error:', error);
     const message = error instanceof Error ? error.message : 'Lỗi cập nhật hóa đơn';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: message },
+      { status: isValidationError(error) ? 400 : 500 }
+    );
   }
 }
 
-// DELETE - Delete sale (reverse stock when needed + hard delete)
+// DELETE - Delete sale and keep stock audit movements
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
-    if (!id) return NextResponse.json({ error: 'Thiếu ID' }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ error: 'Thiếu ID' }, { status: 400 });
+    }
 
     const sale = await prisma.sale.findUnique({
       where: { id },
       include: { items: true },
     });
-
-    if (!sale) return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
+    if (!sale) {
+      return NextResponse.json({ error: 'Không tìm thấy hóa đơn' }, { status: 404 });
+    }
 
     await prisma.$transaction(async (tx) => {
-      // Reverse stock if still active
       if (sale.status === 'completed') {
-        for (const item of sale.items) {
-          await reverseStockForProduct(tx, item.productId, Number(item.quantity), id, `Xóa hóa đơn - ${sale.code}`);
+        const stockImpact = await getRecordedStockImpact(tx, id);
+        const reversedFromMovements = await reverseRecordedStockImpact(
+          tx,
+          stockImpact,
+          id,
+          'sale_delete_reverse',
+          `Xóa hóa đơn - ${sale.code}`
+        );
+
+        if (!reversedFromMovements) {
+          for (const item of sale.items) {
+            await reverseStockForProduct(
+              tx,
+              item.productId,
+              Number(item.quantity),
+              id,
+              `Xóa hóa đơn - ${sale.code}`
+            );
+          }
         }
       }
 
-      // Delete related records then the sale
-      await tx.debtTransaction.deleteMany({ where: { saleId: id } });
-      await tx.stockMovement.deleteMany({ where: { referenceId: id } });
       await tx.saleItem.deleteMany({ where: { saleId: id } });
       await tx.sale.delete({ where: { id } });
 
-      // Recalc debt từ nguồn
-      if (sale.customerId) {
-        await recalcCustomerDebt(tx, sale.customerId);
+      if (sale.status === 'completed') {
+        await refreshCustomerDebt(tx, [sale.customerId]);
       }
     });
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Sales DELETE error:', error);
-    return NextResponse.json({ error: 'Lỗi xóa hóa đơn' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Lỗi xóa hóa đơn';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

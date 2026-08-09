@@ -106,6 +106,84 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // Cash collected from delivery sales, grouped by employee and day.
+    if (action === 'cash-summary') {
+      const dateFrom = searchParams.get('dateFrom');
+      const dateTo = searchParams.get('dateTo');
+
+      const where: Record<string, unknown> = {
+        status: 'completed',
+        paymentMethod: 'cash',
+        deliveryEmployeeId: { not: null },
+      };
+      if (employeeId) where.deliveryEmployeeId = employeeId;
+      if (dateFrom || dateTo) {
+        where.saleDate = {};
+        if (dateFrom) {
+          (where.saleDate as Record<string, unknown>).gte =
+            new Date(dateFrom + 'T00:00:00+07:00');
+        }
+        if (dateTo) {
+          const endDate = new Date(dateTo + 'T00:00:00+07:00');
+          endDate.setDate(endDate.getDate() + 1);
+          (where.saleDate as Record<string, unknown>).lt = endDate;
+        }
+      }
+
+      const sales = await prisma.sale.findMany({
+        where,
+        include: {
+          deliveryEmployee: {
+            select: { id: true, name: true, code: true },
+          },
+        },
+        orderBy: { saleDate: 'desc' },
+      });
+
+      const summary = new Map<string, {
+        date: string;
+        employeeId: string;
+        employeeName: string;
+        employeeCode: string;
+        totalCashCollected: number;
+        totalOrderAmount: number;
+        totalOrders: number;
+      }>();
+
+      for (const sale of sales) {
+        if (!sale.deliveryEmployee) continue;
+        const date = sale.saleDate.toLocaleDateString('en-CA', {
+          timeZone: 'Asia/Ho_Chi_Minh',
+        });
+        const key = sale.deliveryEmployee.id + '|' + date;
+        const current = summary.get(key);
+
+        if (current) {
+          current.totalOrders += 1;
+          current.totalCashCollected += Number(sale.paidAmount);
+          current.totalOrderAmount += Number(sale.totalAmount);
+          continue;
+        }
+
+        summary.set(key, {
+          date,
+          employeeId: sale.deliveryEmployee.id,
+          employeeName: sale.deliveryEmployee.name,
+          employeeCode: sale.deliveryEmployee.code,
+          totalCashCollected: Number(sale.paidAmount),
+          totalOrderAmount: Number(sale.totalAmount),
+          totalOrders: 1,
+        });
+      }
+
+      return NextResponse.json(
+        Array.from(summary.values()).sort((left, right) => {
+          if (left.date !== right.date) return right.date.localeCompare(left.date);
+          return left.employeeCode.localeCompare(right.employeeCode);
+        })
+      );
+    }
+
     // Get delivery history for an employee
     if (action === 'delivery-history' && employeeId) {
       const dateFrom = searchParams.get('dateFrom');

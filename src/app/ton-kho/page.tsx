@@ -9,7 +9,15 @@ interface StockProduct { id: string; code: string; name: string; unit: string; s
 interface StockMovement { id: string; type: string; quantity: number; stockAfter: number; notes: string | null; createdAt: string; product: { name: string; unit: string }; }
 
 const typeLabels: Record<string, string> = {
-  purchase: 'Nhập hàng', sale: 'Bán hàng', sale_cancel: 'Hủy bán', purchase_cancel: 'Hủy nhập', adjustment: 'Điều chỉnh',
+  purchase: 'Nhập hàng',
+  sale: 'Bán hàng',
+  sale_cancel: 'Hủy bán',
+  purchase_cancel: 'Hủy nhập',
+  sale_edit_reverse: 'Hoàn kho khi sửa bán',
+  sale_delete_reverse: 'Hoàn kho khi xóa bán',
+  purchase_edit_reverse: 'Hoàn tác phiếu nhập cũ',
+  purchase_delete_reverse: 'Hoàn kho khi xóa nhập',
+  adjustment: 'Điều chỉnh',
 };
 
 export default function StockPage() {

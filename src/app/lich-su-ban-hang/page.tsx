@@ -11,14 +11,15 @@ interface Customer { id: string; code: string; name: string; }
 interface Sale {
   id: string; code: string; saleDate: string; subtotal: number; discount: number;
   totalAmount: number; paidAmount: number; debtAmount: number; status: string; notes: string | null;
+  remainingDebt: number;
   paymentMethod: string;
   customer: { name: string; code: string; phone: string | null } | null;
   customerId: string | null;
   deliveryEmployee: { name: string; code: string } | null;
   deliveryEmployeeId: string | null;
-  items: Array<{ productId: string; quantity: number; unitPrice: number; discount: number; totalPrice: number; product: { name: string; unit: string } }>;
+  items: Array<{ id: string; productId: string; quantity: number; unitPrice: number; discount: number; totalPrice: number; product: { name: string; unit: string } }>;
 }
-interface EditItem { productId: string; name: string; unit: string; quantity: string; unitPrice: string; discount: string; }
+interface EditItem { id?: string; productId: string; name: string; unit: string; quantity: string; unitPrice: string; discount: string; }
 
 const saleStatusMeta: Record<string, { label: string; badgeClass: string }> = {
   completed: { label: 'Hoàn thành', badgeClass: 'badge-success' },
@@ -151,7 +152,7 @@ export default function SalesHistoryPage() {
       discount: sale.discount,
       totalAmount: sale.totalAmount,
       paidAmount: sale.paidAmount,
-      debtAmount: sale.debtAmount,
+      debtAmount: sale.remainingDebt,
       customerDebt,
       notes: sale.notes || null,
     });
@@ -171,7 +172,7 @@ export default function SalesHistoryPage() {
     setEditDiscount(String(sale.discount || 0));
     setEditPaidAmount(String(sale.paidAmount));
     setEditItems(sale.items.map(i => ({
-      productId: i.productId, name: i.product.name, unit: i.product.unit,
+      id: i.id, productId: i.productId, name: i.product.name, unit: i.product.unit,
       quantity: String(i.quantity), unitPrice: String(i.unitPrice), discount: String(i.discount || 0),
     })));
   };
@@ -219,7 +220,7 @@ export default function SalesHistoryPage() {
           notes: editNotes,
           customerId: editCustomerId, paymentMethod: editPaymentMethod,
           items: editItems.map(i => ({
-            productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount,
+            id: i.id, productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount,
           })),
           discount: editDiscount, paidAmount: editPaidAmount,
         }),
@@ -315,7 +316,7 @@ export default function SalesHistoryPage() {
                     </td>
                     <td style={{ fontSize: 12, maxWidth: 260, whiteSpace: 'normal', lineHeight: 1.4 }}>{s.items.map(it => `${it.product.name} x${it.quantity}`).join(', ')}</td>
                     <td className="text-right font-bold">{formatCurrency(s.totalAmount)}</td>
-                    <td className="text-right" style={{ color: s.debtAmount > 0 ? 'var(--warning)' : 'var(--text-muted)', fontWeight: s.debtAmount > 0 ? 700 : 400 }}>{formatCurrency(s.debtAmount)}</td>
+                    <td className="text-right" style={{ color: s.remainingDebt > 0 ? 'var(--warning)' : 'var(--text-muted)', fontWeight: s.remainingDebt > 0 ? 700 : 400 }}>{formatCurrency(s.remainingDebt)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}><span className={`badge ${statusMeta.badgeClass}`}>{statusMeta.label}</span></td>
                     <td className="text-center">
                       <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
@@ -358,7 +359,7 @@ export default function SalesHistoryPage() {
                 {viewSale.discount > 0 && <div>Giảm giá đơn: <strong className="text-danger">-{formatCurrency(viewSale.discount)}</strong></div>}
                 <div style={{ fontSize: 16 }}>Tổng cộng: <strong>{formatCurrency(viewSale.totalAmount)}</strong></div>
                 <div className="text-success">Đã trả: <strong>{formatCurrency(viewSale.paidAmount)}</strong></div>
-                {viewSale.debtAmount > 0 && <div className="text-warning">Còn nợ: <strong>{formatCurrency(viewSale.debtAmount)}</strong></div>}
+                {viewSale.remainingDebt > 0 && <div className="text-warning">Còn nợ: <strong>{formatCurrency(viewSale.remainingDebt)}</strong></div>}
               </div>
               {viewSale.notes && <div style={{ marginTop: 12 }} className="text-muted">Ghi chú: {viewSale.notes}</div>}
               {viewSale.status === 'completed' && (

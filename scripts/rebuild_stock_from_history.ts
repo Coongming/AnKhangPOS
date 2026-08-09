@@ -50,7 +50,7 @@ async function main() {
       orderBy: { code: 'asc' },
     }),
     prisma.purchase.findMany({
-      where: { status: 'completed', type: 'purchase' },
+      where: { status: 'completed' },
       include: {
         items: {
           include: {

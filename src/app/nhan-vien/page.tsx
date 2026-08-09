@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Users, Edit3, Trash2, Clock, Truck, DollarSign, Search, ChevronDown, ChevronUp, Calendar, Save } from 'lucide-react';
+import { Plus, Users, Edit3, Trash2, Clock, Truck, DollarSign, Search, ChevronDown, ChevronUp, Calendar, Save, Banknote } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/utils';
 
@@ -16,6 +16,16 @@ interface DeliveryItem { code: string; saleDate: string; customer: { name: strin
 interface SalaryCalc {
   employee: Employee; totalHours: number; hourlyPay: number; deliveryPay: number; totalPay: number; remaining: number; totalAdvanced: number;
   totalBottles: number;
+}
+
+interface CashSummaryRow {
+  date: string;
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  totalCashCollected: number;
+  totalOrderAmount: number;
+  totalOrders: number;
 }
 
 export default function EmployeesPage() {
@@ -47,6 +57,11 @@ export default function EmployeesPage() {
   const [salaryPeriodType, setSalaryPeriodType] = useState('monthly');
   const [salaryNotes, setSalaryNotes] = useState('');
   const [advanceAmount, setAdvanceAmount] = useState('');
+  const [cashSummaryDateFrom, setCashSummaryDateFrom] = useState('');
+  const [cashSummaryDateTo, setCashSummaryDateTo] = useState('');
+  const [cashSummaryEmployeeId, setCashSummaryEmployeeId] = useState('');
+  const [cashSummaryRows, setCashSummaryRows] = useState<CashSummaryRow[]>([]);
+  const [loadingCashSummary, setLoadingCashSummary] = useState(false);
 
 
 
@@ -58,15 +73,56 @@ export default function EmployeesPage() {
     finally { setLoading(false); }
   }, [showToast]);
 
+  const loadCashSummary = useCallback(async () => {
+    if (!cashSummaryDateFrom || !cashSummaryDateTo) return;
+
+    try {
+      setLoadingCashSummary(true);
+      const params = new URLSearchParams({
+        action: 'cash-summary',
+        dateFrom: cashSummaryDateFrom,
+        dateTo: cashSummaryDateTo,
+      });
+      if (cashSummaryEmployeeId) {
+        params.set('employeeId', cashSummaryEmployeeId);
+      }
+
+      const response = await fetch('/api/salary?' + params.toString());
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Lỗi tải thống kê tiền mặt');
+      setCashSummaryRows(Array.isArray(data) ? data : []);
+    } catch (error) {
+      showToast(
+        'error',
+        error instanceof Error ? error.message : 'Lỗi tải thống kê tiền mặt'
+      );
+    } finally {
+      setLoadingCashSummary(false);
+    }
+  }, [
+    cashSummaryDateFrom,
+    cashSummaryDateTo,
+    cashSummaryEmployeeId,
+    showToast,
+  ]);
+
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Set default salary period to this month
+  // Set default salary and cash-summary periods to this month
   useEffect(() => {
     const now = new Date();
-    setSalaryDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`);
+    const firstDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    setSalaryDateTo(`${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`);
+    const lastDate = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+    setSalaryDateFrom(firstDate);
+    setSalaryDateTo(lastDate);
+    setCashSummaryDateFrom(firstDate);
+    setCashSummaryDateTo(lastDate);
   }, []);
+
+  useEffect(() => {
+    void loadCashSummary();
+  }, [loadCashSummary]);
 
   // --- Employee CRUD ---
   const openCreate = () => { setEditingEmployee(null); setForm({ name: '', phone: '', salaryType: 'delivery', hourlyRate: '', deliveryRate: '', notes: '' }); setShowForm(true); };
@@ -194,6 +250,15 @@ export default function EmployeesPage() {
 
 
 
+  const cashSummaryTotals = cashSummaryRows.reduce(
+    (totals, row) => ({
+      orders: totals.orders + row.totalOrders,
+      orderAmount: totals.orderAmount + row.totalOrderAmount,
+      cashCollected: totals.cashCollected + row.totalCashCollected,
+    }),
+    { orders: 0, orderAmount: 0, cashCollected: 0 }
+  );
+
   const salaryTypeLabel = (t: string) => t === 'hourly' ? '⏰ Theo giờ' : t === 'delivery' ? '🚚 Theo giao hàng' : '⏰🚚 Cả hai';
 
   if (loading) return <div className="loading-page"><div className="loading-spinner" /></div>;
@@ -211,6 +276,111 @@ export default function EmployeesPage() {
           <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Thêm nhân viên</button>
         </div>
       </div>
+
+      <section className="card" style={{ marginBottom: 20 }}>
+        <div className="card-header">
+          <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Banknote size={18} />
+            Tiền mặt giao hàng theo nhân viên
+          </h3>
+        </div>
+        <div className="form-row form-row-4" style={{ alignItems: 'flex-end', marginBottom: 14 }}>
+          <div className="form-group">
+            <label className="form-label">Từ ngày</label>
+            <input
+              className="form-input"
+              type="date"
+              value={cashSummaryDateFrom}
+              onChange={(event) => setCashSummaryDateFrom(event.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Đến ngày</label>
+            <input
+              className="form-input"
+              type="date"
+              value={cashSummaryDateTo}
+              onChange={(event) => setCashSummaryDateTo(event.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Nhân viên</label>
+            <select
+              className="form-select"
+              value={cashSummaryEmployeeId}
+              onChange={(event) => setCashSummaryEmployeeId(event.target.value)}
+            >
+              <option value="">Tất cả nhân viên</option>
+              {employees.map((employee) => (
+                <option key={employee.id} value={employee.id}>{employee.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <button
+              className="btn btn-primary"
+              onClick={() => void loadCashSummary()}
+              disabled={loadingCashSummary}
+            >
+              <Search size={15} />
+              Lọc
+            </button>
+          </div>
+        </div>
+
+        {loadingCashSummary ? (
+          <div className="loading-page" style={{ minHeight: 120 }}>
+            <div className="loading-spinner" />
+          </div>
+        ) : cashSummaryRows.length === 0 ? (
+          <div className="empty-state" style={{ padding: 32 }}>
+            <Banknote />
+            <h3>Chưa có tiền mặt giao hàng</h3>
+          </div>
+        ) : (
+          <>
+            <div className="table-wrapper">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Ngày</th>
+                    <th>Mã NV</th>
+                    <th>Nhân viên</th>
+                    <th className="text-right">Số đơn</th>
+                    <th className="text-right">Tổng tiền đơn</th>
+                    <th className="text-right">Tiền mặt đã thu</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cashSummaryRows.map((row) => (
+                    <tr key={row.employeeId + '-' + row.date}>
+                      <td>{formatDate(row.date + 'T00:00:00+07:00')}</td>
+                      <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{row.employeeCode}</td>
+                      <td>{row.employeeName}</td>
+                      <td className="text-right">{row.totalOrders}</td>
+                      <td className="text-right">{formatCurrency(row.totalOrderAmount)}</td>
+                      <td className="text-right font-bold">{formatCurrency(row.totalCashCollected)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 24,
+              flexWrap: 'wrap',
+              paddingTop: 12,
+              borderTop: '1px solid var(--border-color)',
+              fontSize: 13,
+            }}>
+              <span><strong>{cashSummaryTotals.orders}</strong> đơn</span>
+              <span>Tổng đơn: <strong>{formatCurrency(cashSummaryTotals.orderAmount)}</strong></span>
+              <span>Tiền mặt: <strong className="text-success">{formatCurrency(cashSummaryTotals.cashCollected)}</strong></span>
+            </div>
+          </>
+        )}
+      </section>
 
       {/* Employee List */}
       {employees.length === 0 ? (

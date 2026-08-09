@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Wallet, ArrowDownCircle, ArrowUpCircle, DollarSign } from 'lucide-react';
+import { Wallet, ArrowDownCircle, ArrowUpCircle, DollarSign, Search } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 
@@ -23,6 +23,7 @@ export default function DebtPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [transactions, setTransactions] = useState<DebtTransaction[]>([]);
+  const [debtSearch, setDebtSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [showPayModal, setShowPayModal] = useState(false);
   const [payTarget, setPayTarget] = useState<{ id: string; name: string; debt: number; type: 'customer_payment' | 'supplier_payment' } | null>(null);
@@ -70,9 +71,36 @@ export default function DebtPage() {
   };
 
   const debtEntities = tab === 'customer' ? customers : suppliers;
-  const supplierPayable = suppliers.filter(s => s.debt > 0).reduce((sum, s) => sum + s.debt, 0);
-  const supplierCredit = suppliers.filter(s => s.debt < 0).reduce((sum, s) => sum + Math.abs(s.debt), 0);
-  const totalDebt = tab === 'customer' ? customers.reduce((sum, e) => sum + e.debt, 0) : supplierPayable;
+  const normalizedDebtSearch = debtSearch.trim().toLowerCase();
+  const filteredDebtEntities = debtEntities.filter((entity) => {
+    if (!normalizedDebtSearch) return true;
+    return (entity.code + ' ' + entity.name + ' ' + (entity.phone || ''))
+      .toLowerCase()
+      .includes(normalizedDebtSearch);
+  });
+  const visibleEntities = normalizedDebtSearch ? filteredDebtEntities : debtEntities;
+  const supplierPayable = suppliers
+    .filter((supplier) => supplier.debt > 0)
+    .reduce((sum, supplier) => sum + supplier.debt, 0);
+  const supplierCredit = suppliers
+    .filter((supplier) => supplier.debt < 0)
+    .reduce((sum, supplier) => sum + Math.abs(supplier.debt), 0);
+  const visibleSupplierPayable = visibleEntities
+    .filter((supplier) => supplier.debt > 0)
+    .reduce((sum, supplier) => sum + supplier.debt, 0);
+  const visibleSupplierCredit = visibleEntities
+    .filter((supplier) => supplier.debt < 0)
+    .reduce((sum, supplier) => sum + Math.abs(supplier.debt), 0);
+  const totalDebt = tab === 'customer'
+    ? visibleEntities.reduce((sum, entity) => sum + entity.debt, 0)
+    : (normalizedDebtSearch ? visibleSupplierPayable : supplierPayable);
+  const displayedSupplierCredit = normalizedDebtSearch
+    ? visibleSupplierCredit
+    : supplierCredit;
+
+  useEffect(() => {
+    setDebtSearch('');
+  }, [tab]);
 
   return (
     <div>
@@ -100,8 +128,9 @@ export default function DebtPage() {
           <div className="stat-value" style={{ color: tab === 'customer' ? 'var(--warning)' : 'var(--danger)' }}>{formatCurrency(totalDebt)}</div>
           <div className="stat-sub">
             {tab === 'customer'
-              ? `${debtEntities.length} khách nợ`
-              : `${suppliers.filter(s => s.debt > 0).length} NCC nợ${supplierCredit > 0 ? ` • Ứng trước ${formatCurrency(supplierCredit)}` : ''}`}
+              ? visibleEntities.length + (normalizedDebtSearch ? '/' + debtEntities.length : '') + ' khách nợ'
+              : visibleEntities.filter((supplier) => supplier.debt > 0).length + ' NCC nợ' +
+                (displayedSupplierCredit > 0 ? ' • Ứng trước ' + formatCurrency(displayedSupplierCredit) : '')}
           </div>
         </div>
       </div>
@@ -110,17 +139,33 @@ export default function DebtPage() {
         <div className="card-grid card-grid-2">
           {/* Debt List */}
           <div className="card">
-            <div className="card-header">
+            <div className="card-header" style={{ gap: 12, flexWrap: 'wrap' }}>
               <h3 className="card-title">{tab === 'customer' ? 'Danh sách khách nợ' : 'Danh sách công nợ NCC'}</h3>
+              <div style={{ position: 'relative', width: 'min(280px, 100%)' }}>
+                <Search
+                  size={15}
+                  style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
+                />
+                <input
+                  className="form-input"
+                  value={debtSearch}
+                  onChange={(event) => setDebtSearch(event.target.value)}
+                  placeholder="Tìm mã, tên hoặc SĐT"
+                  style={{ paddingLeft: 32 }}
+                />
+              </div>
             </div>
-            {debtEntities.length === 0 ? (
-              <div className="empty-state"><Wallet /><h3>Không có công nợ</h3></div>
+            {visibleEntities.length === 0 ? (
+              <div className="empty-state">
+                <Wallet />
+                <h3>{normalizedDebtSearch ? 'Không có kết quả phù hợp' : 'Không có công nợ'}</h3>
+              </div>
             ) : (
               <div className="table-wrapper">
                 <table className="table">
                   <thead><tr><th>Tên</th><th className="text-right">Công nợ</th><th className="text-center">Thao tác</th></tr></thead>
                   <tbody>
-                    {debtEntities.map((e) => (
+                    {visibleEntities.map((e) => (
                       <tr key={e.id}>
                         <td>
                           <div style={{ fontWeight: 600 }}>{e.name}</div>
@@ -191,7 +236,15 @@ export default function DebtPage() {
               </div>
               <div className="form-group">
                 <label className="form-label">Số tiền thanh toán *</label>
-                <input className="form-input" type="number" min="0" max={payTarget.debt} value={payAmount} onChange={(e) => setPayAmount(e.target.value)} autoFocus />
+                <input
+                  className="form-input"
+                  type="number"
+                  min="0"
+                  max={payTarget.type === 'customer_payment' ? payTarget.debt : undefined}
+                  value={payAmount}
+                  onChange={(e) => setPayAmount(e.target.value)}
+                  autoFocus
+                />
                 <button className="btn btn-ghost btn-sm mt-1" onClick={() => setPayAmount(String(payTarget.debt))}>Trả hết</button>
               </div>
               <div className="form-group">

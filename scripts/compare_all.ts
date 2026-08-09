@@ -107,7 +107,7 @@ async function main() {
   const dbPurchIds = (await prisma.purchase.findMany({ select: { id: true } })).map(p => p.id);
   const missingPurch = filePurchases.filter((f: any) => !dbPurchIds.includes(f.id));
   const extraPurch = dbPurchIds.filter(id => !filePurchases.find((f: any) => f.id === id)).length;
-  console.log(`\n📥 PHIẾU NHẬP/TRẢ: File=${filePurchases.length} | DB=${dbPurchCount}`);
+  console.log(`\n📥 PHIẾU NHẬP: File=${filePurchases.length} | DB=${dbPurchCount}`);
   if (missingPurch.length) console.log(`   ❌ Có trong file, CHƯA CÓ trong DB: ${missingPurch.length} phiếu`, missingPurch.map((p: any) => p.code));
   if (extraPurch) console.log(`   ➕ Có trong DB, KHÔNG CÓ trong file: ${extraPurch} phiếu`);
   if (!missingPurch.length && !extraPurch) console.log(`   ✅ Giống nhau`);

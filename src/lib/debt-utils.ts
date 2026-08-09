@@ -1,4 +1,4 @@
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
 type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 
@@ -17,12 +17,11 @@ export async function recalcCustomerDebt(tx: TxClient, customerId: string): Prom
   });
   const totalSaleDebt = Number(salesDebt._sum.debtAmount || 0);
 
-  // 2. Tổng thanh toán nợ thực tế (từ trang Công nợ — không có saleId)
+  // 2. Tổng thanh toán nợ thực tế từ trang Công nợ
   const payments = await tx.debtTransaction.aggregate({
     where: {
       customerId,
       type: 'customer_payment',
-      saleId: null, // Chỉ payment thực (ghi tay), không phải hoàn nợ do hủy/sửa HĐ
     },
     _sum: { amount: true },
   });
@@ -42,12 +41,95 @@ export async function recalcCustomerDebt(tx: TxClient, customerId: string): Prom
 }
 
 /**
+ * Phân bổ toàn bộ khoản khách đã trả vào hóa đơn cũ nhất trước.
+ *
+ * Giao dịch nhận tiền được giữ độc lập trong DebtTransaction. Bảng phân bổ chỉ
+ * là dữ liệu dẫn xuất nên có thể xóa và dựng lại an toàn sau khi sửa hóa đơn.
+ */
+export async function reallocateCustomerPayments(tx: TxClient, customerId: string): Promise<void> {
+  const [sales, payments] = await Promise.all([
+    tx.sale.findMany({
+      where: {
+        customerId,
+        status: 'completed',
+        debtAmount: { gt: 0 },
+      },
+      select: {
+        id: true,
+        debtAmount: true,
+      },
+      orderBy: [
+        { saleDate: 'asc' },
+        { createdAt: 'asc' },
+      ],
+    }),
+    tx.debtTransaction.findMany({
+      where: {
+        customerId,
+        type: 'customer_payment',
+      },
+      select: {
+        id: true,
+        amount: true,
+      },
+      orderBy: [
+        { createdAt: 'asc' },
+        { id: 'asc' },
+      ],
+    }),
+  ]);
+
+  await tx.customerPaymentAllocation.deleteMany({
+    where: {
+      transaction: {
+        customerId,
+        type: 'customer_payment',
+      },
+    },
+  });
+
+  if (sales.length === 0 || payments.length === 0) return;
+
+  const remainingBySale = sales.map((sale) => ({
+    id: sale.id,
+    remaining: Number(sale.debtAmount),
+  }));
+  const allocations: Array<{ transactionId: string; saleId: string; amount: number }> = [];
+  let saleIndex = 0;
+
+  for (const payment of payments) {
+    let paymentRemaining = Math.abs(Number(payment.amount));
+
+    while (paymentRemaining > 0 && saleIndex < remainingBySale.length) {
+      const sale = remainingBySale[saleIndex];
+      if (sale.remaining <= 0) {
+        saleIndex += 1;
+        continue;
+      }
+
+      const amount = Math.min(paymentRemaining, sale.remaining);
+      allocations.push({
+        transactionId: payment.id,
+        saleId: sale.id,
+        amount,
+      });
+      paymentRemaining -= amount;
+      sale.remaining -= amount;
+    }
+  }
+
+  if (allocations.length > 0) {
+    await tx.customerPaymentAllocation.createMany({ data: allocations });
+  }
+}
+
+/**
  * Tính lại công nợ nhà cung cấp từ dữ liệu gốc
  */
 export async function recalcSupplierDebt(tx: TxClient, supplierId: string): Promise<number> {
   // 1. Tổng nợ từ phiếu nhập completed
   const purchaseDebt = await tx.purchase.aggregate({
-    where: { supplierId, status: 'completed', type: 'purchase' },
+    where: { supplierId, status: 'completed' },
     _sum: { debtAmount: true },
   });
   const totalPurchaseDebt = Number(purchaseDebt._sum.debtAmount || 0);
@@ -57,7 +139,6 @@ export async function recalcSupplierDebt(tx: TxClient, supplierId: string): Prom
     where: {
       supplierId,
       type: 'supplier_payment',
-      purchaseId: null,
     },
     _sum: { amount: true },
   });

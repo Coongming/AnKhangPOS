@@ -231,3 +231,138 @@ export async function checkStockForProduct(
     throw new Error(`Sản phẩm "${product.name}" không đủ tồn kho (còn ${stockProduct.stock} ${stockProduct.unit})`);
   }
 }
+
+export async function calculateSaleCostPrice(tx: TxClient, productId: string): Promise<number> {
+  const product = await tx.product.findUnique({
+    where: { id: productId },
+    include: {
+      blendTemplate: {
+        include: {
+          items: {
+            include: {
+              product: {
+                select: { costPrice: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!product) throw new Error('Sản phẩm không tồn tại');
+
+  if (product.blendTemplate && product.blendTemplate.items.length > 0) {
+    const totalQuantity = product.blendTemplate.items.reduce(
+      (sum, item) => sum + Number(item.quantity),
+      0
+    );
+    if (totalQuantity > 0) {
+      return product.blendTemplate.items.reduce(
+        (sum, item) =>
+          sum + (Number(item.quantity) / totalQuantity) * Number(item.product.costPrice),
+        0
+      );
+    }
+  }
+
+  if (product.linkedStockId) {
+    const linkedProduct = await tx.product.findUnique({
+      where: { id: product.linkedStockId },
+      select: { costPrice: true },
+    });
+    if (!linkedProduct) throw new Error('Sản phẩm liên kết kho không tồn tại');
+    return Number(linkedProduct.costPrice);
+  }
+
+  return Number(product.costPrice);
+}
+
+export async function getRecordedStockImpact(
+  tx: TxClient,
+  referenceId: string
+): Promise<Map<string, number>> {
+  const movements = await tx.stockMovement.findMany({
+    where: { referenceId },
+    select: { productId: true, quantity: true },
+  });
+  const impact = new Map<string, number>();
+
+  for (const movement of movements) {
+    impact.set(
+      movement.productId,
+      (impact.get(movement.productId) || 0) + Number(movement.quantity)
+    );
+  }
+
+  for (const [productId, quantity] of Array.from(impact.entries())) {
+    if (Math.abs(quantity) < 0.005) impact.delete(productId);
+  }
+
+  return impact;
+}
+
+export async function assertStockAfterReferenceReplacement(
+  tx: TxClient,
+  currentImpact: Map<string, number>,
+  replacementImpact: Map<string, number>,
+  actionLabel: string
+): Promise<void> {
+  const productIds = Array.from(new Set([
+    ...Array.from(currentImpact.keys()),
+    ...Array.from(replacementImpact.keys()),
+  ]));
+  if (productIds.length === 0) return;
+
+  const products = await tx.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, name: true, unit: true, stock: true },
+  });
+
+  for (const product of products) {
+    const finalStock =
+      Number(product.stock) -
+      (currentImpact.get(product.id) || 0) +
+      (replacementImpact.get(product.id) || 0);
+
+    if (finalStock < -0.005) {
+      throw new Error(
+        `Không thể ${actionLabel}: "${product.name}" sẽ còn ${finalStock.toFixed(2)} ${product.unit}`
+      );
+    }
+  }
+}
+
+export async function reverseRecordedStockImpact(
+  tx: TxClient,
+  impact: Map<string, number>,
+  referenceId: string,
+  movementType: string,
+  notes: string
+): Promise<boolean> {
+  if (impact.size === 0) return false;
+
+  for (const [productId, quantity] of Array.from(impact.entries())) {
+    const reverseQuantity = -quantity;
+    const updatedProduct = await tx.product.update({
+      where: { id: productId },
+      data: reverseQuantity >= 0
+        ? { stock: { increment: reverseQuantity } }
+        : { stock: { decrement: Math.abs(reverseQuantity) } },
+      select: { stock: true },
+    });
+
+    await tx.stockMovement.create({
+      data: {
+        productId,
+        type: movementType,
+        quantity: reverseQuantity,
+        stockAfter: updatedProduct.stock,
+        referenceId,
+        notes,
+      },
+    });
+  }
+
+  return true;
+}

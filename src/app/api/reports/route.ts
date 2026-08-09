@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma';
 import { getStartOfDayVN, getEndOfDayVN, getStartOfWeekVN, getStartOfMonthVN, getStartOfYearVN } from '@/lib/utils';
 import { applyBlendVirtualStock } from '@/lib/blend-stock';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -58,20 +60,22 @@ export async function GET(request: NextRequest) {
       const totalRevenue = sales.reduce((sum, s) => sum + Number(s.totalAmount), 0);
       const totalCost = sales.reduce((sum, s) => sum + Number(s.totalCost), 0);
       const totalOrders = sales.length;
-      const cashRevenue = sales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.totalAmount), 0);
-      const transferRevenue = sales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + Number(s.totalAmount), 0);
+      const cashRevenue = sales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.paidAmount), 0);
+      const transferRevenue = sales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + Number(s.paidAmount), 0);
+      const debtRevenue = sales.reduce((sum, s) => sum + Number(s.debtAmount), 0);
 
       // Group by date
-      const dailyData: Record<string, { date: string; revenue: number; orders: number; cashRevenue: number; transferRevenue: number }> = {};
+      const dailyData: Record<string, { date: string; revenue: number; orders: number; cashRevenue: number; transferRevenue: number; debtRevenue: number }> = {};
       sales.forEach((s) => {
         // Convert to VN timezone for correct date grouping
         const vnDate = new Date(s.saleDate.getTime() + 7 * 60 * 60 * 1000);
         const dateKey = vnDate.toISOString().split('T')[0];
-        if (!dailyData[dateKey]) dailyData[dateKey] = { date: dateKey, revenue: 0, orders: 0, cashRevenue: 0, transferRevenue: 0 };
+        if (!dailyData[dateKey]) dailyData[dateKey] = { date: dateKey, revenue: 0, orders: 0, cashRevenue: 0, transferRevenue: 0, debtRevenue: 0 };
         dailyData[dateKey].revenue += Number(s.totalAmount);
         dailyData[dateKey].orders += 1;
-        if (s.paymentMethod === 'cash') dailyData[dateKey].cashRevenue += Number(s.totalAmount);
-        else if (s.paymentMethod === 'transfer') dailyData[dateKey].transferRevenue += Number(s.totalAmount);
+        dailyData[dateKey].debtRevenue += Number(s.debtAmount);
+        if (s.paymentMethod === 'cash') dailyData[dateKey].cashRevenue += Number(s.paidAmount);
+        else if (s.paymentMethod === 'transfer') dailyData[dateKey].transferRevenue += Number(s.paidAmount);
       });
 
       return NextResponse.json({
@@ -81,6 +85,7 @@ export async function GET(request: NextRequest) {
         grossProfit: totalRevenue - totalCost,
         cashRevenue,
         transferRevenue,
+        debtRevenue,
         dailyData: Object.values(dailyData),
       });
     }
@@ -141,7 +146,7 @@ export async function GET(request: NextRequest) {
       // === TIỀN RA ===
       // Trả NCC
       const purchases = await prisma.purchase.findMany({
-        where: { purchaseDate: { gte: startDate, lt: endDate }, status: 'completed', type: 'purchase' },
+        where: { purchaseDate: { gte: startDate, lt: endDate }, status: 'completed' },
       });
       const totalPaidToSuppliers = purchases.reduce((sum, p) => sum + Number(p.paidAmount), 0);
 
@@ -150,9 +155,22 @@ export async function GET(request: NextRequest) {
       });
       const totalSupplierPayments = supplierPayments.reduce((sum, d) => sum + Math.abs(Number(d.amount)), 0);
 
+      // SalaryPayment đã tự tạo Expense. Loại expense liên kết để sổ quỹ không tính lương hai lần.
+      const salaryPayments = await prisma.salaryPayment.findMany({
+        where: { createdAt: { gte: startDate, lt: endDate } },
+      });
+      const totalSalary = salaryPayments.reduce((sum, salary) => sum + Number(salary.totalPay), 0);
+      const salaryExpenseIds = salaryPayments
+        .map((salary) => salary.expenseId)
+        .filter((expenseId): expenseId is string => Boolean(expenseId));
+
       // Chi phí vận hành
       const operatingExpenses = await prisma.expense.findMany({
-        where: { date: { gte: startDate, lt: endDate }, category: { type: 'operating' } },
+        where: {
+          date: { gte: startDate, lt: endDate },
+          category: { type: 'operating' },
+          ...(salaryExpenseIds.length > 0 && { id: { notIn: salaryExpenseIds } }),
+        },
         include: { category: true },
       });
       const totalOperatingExpenses = operatingExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
@@ -164,11 +182,6 @@ export async function GET(request: NextRequest) {
       });
       const totalCashflowOut = cashflowExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
 
-      // Lương nhân viên (SalaryPayment)
-      const salaryPayments = await prisma.salaryPayment.findMany({
-        where: { createdAt: { gte: startDate, lt: endDate } },
-      });
-      const totalSalary = salaryPayments.reduce((sum, s) => sum + Number(s.totalPay), 0);
 
       const totalIn = cashSales + transferSales + totalCustomerPayments + totalCapitalDeposits;
       const totalOut = totalPaidToSuppliers + totalSupplierPayments + totalOperatingExpenses + totalCashflowOut + totalSalary;
@@ -251,13 +264,15 @@ export async function GET(request: NextRequest) {
       if (linkedIds.length > 0) {
         const linkedProducts = await prisma.product.findMany({
           where: { id: { in: linkedIds } },
-          select: { id: true, stock: true },
+          select: { id: true, stock: true, costPrice: true },
         });
-        const linkedStockMap = new Map(linkedProducts.map((p) => [p.id, p.stock]));
+        const linkedStockMap = new Map(linkedProducts.map((p) => [p.id, { stock: p.stock, costPrice: p.costPrice }]));
 
         for (const product of products) {
           if (product.linkedStockId && linkedStockMap.has(product.linkedStockId)) {
-            product.stock = linkedStockMap.get(product.linkedStockId)!;
+            const linkedProduct = linkedStockMap.get(product.linkedStockId)!;
+            product.stock = linkedProduct.stock;
+            product.costPrice = linkedProduct.costPrice;
           }
         }
       }

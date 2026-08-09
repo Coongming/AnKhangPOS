@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { BarChart3, TrendingUp, Calendar, Banknote, CreditCard } from 'lucide-react';
+import { BarChart3, TrendingUp, Calendar, Banknote, CreditCard, Wallet } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 import { formatCurrency, formatNumber, formatDate } from '@/lib/utils';
 
@@ -18,8 +18,8 @@ import {
 
 interface RevenueData {
   totalRevenue: number; totalCost: number; totalOrders: number; grossProfit: number;
-  cashRevenue: number; transferRevenue: number;
-  dailyData: Array<{ date: string; revenue: number; orders: number; cashRevenue: number; transferRevenue: number }>;
+  cashRevenue: number; transferRevenue: number; debtRevenue: number;
+  dailyData: Array<{ date: string; revenue: number; orders: number; cashRevenue: number; transferRevenue: number; debtRevenue: number }>;
 }
 
 // Custom tooltip cho biểu đồ
@@ -92,7 +92,7 @@ export default function RevenueReportPage() {
 
       {loading ? <div className="loading-page"><div className="loading-spinner" /></div> : data && (
         <>
-          <div className="card-grid card-grid-3" style={{ marginBottom: 24 }}>
+          <div className="card-grid card-grid-4" style={{ marginBottom: 24 }}>
             <div className="stat-card">
               <div className="stat-icon accent"><BarChart3 size={22} /></div>
               <div className="stat-content"><h3>Tổng doanh thu</h3><div className="stat-value">{formatCurrency(data.totalRevenue)}</div></div>
@@ -104,6 +104,10 @@ export default function RevenueReportPage() {
             <div className="stat-card">
               <div className="stat-icon accent"><CreditCard size={22} /></div>
               <div className="stat-content"><h3>Chuyển khoản</h3><div className="stat-value">{formatCurrency(data.transferRevenue)}</div></div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}><Wallet size={22} /></div>
+              <div className="stat-content"><h3>Nợ</h3><div className="stat-value" style={{ color: data.debtRevenue > 0 ? 'var(--danger)' : undefined }}>{formatCurrency(data.debtRevenue)}</div></div>
             </div>
           </div>
 
@@ -172,10 +176,10 @@ export default function RevenueReportPage() {
               <div className="card-header"><h3 className="card-title">Chi tiết</h3></div>
               <div className="table-wrapper">
                 <table className="table">
-                  <thead><tr><th>Ngày</th><th className="text-right">Doanh thu</th><th className="text-right">Tiền mặt</th><th className="text-right">Chuyển khoản</th><th className="text-center">Số đơn</th></tr></thead>
+                  <thead><tr><th>Ngày</th><th className="text-right">Doanh thu</th><th className="text-right">Tiền mặt</th><th className="text-right">Chuyển khoản</th><th className="text-right">Nợ</th><th className="text-center">Số đơn</th></tr></thead>
                   <tbody>
                     {data.dailyData.map((d) => (
-                      <tr key={d.date}><td>{formatDate(d.date)}</td><td className="text-right font-bold">{formatCurrency(d.revenue)}</td><td className="text-right">{formatCurrency(d.cashRevenue)}</td><td className="text-right">{formatCurrency(d.transferRevenue)}</td><td className="text-center">{d.orders}</td></tr>
+                      <tr key={d.date}><td>{formatDate(d.date)}</td><td className="text-right font-bold">{formatCurrency(d.revenue)}</td><td className="text-right">{formatCurrency(d.cashRevenue)}</td><td className="text-right">{formatCurrency(d.transferRevenue)}</td><td className="text-right" style={{ color: d.debtRevenue > 0 ? 'var(--danger)' : undefined }}>{formatCurrency(d.debtRevenue)}</td><td className="text-center">{d.orders}</td></tr>
                     ))}
                   </tbody>
                 </table>

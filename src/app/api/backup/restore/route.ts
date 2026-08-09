@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { reallocateCustomerPayments } from '@/lib/debt-utils';
 
 const BACKUP_COLLECTIONS = [
   'systemSettings',
@@ -52,6 +53,40 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function normalizeDebtTransactions(
+  value: unknown
+): Prisma.DebtTransactionCreateManyInput[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((record) => {
+    if (!isObject(record)) {
+      throw new Error('Dữ liệu giao dịch công nợ trong backup không hợp lệ');
+    }
+
+    const transaction = { ...record };
+    delete transaction.saleId;
+    delete transaction.purchaseId;
+    return transaction as Prisma.DebtTransactionCreateManyInput;
+  });
+}
+
+function normalizePurchases(value: unknown): Prisma.PurchaseCreateManyInput[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((record) => {
+    if (!isObject(record)) {
+      throw new Error('Dữ liệu phiếu nhập trong backup không hợp lệ');
+    }
+    if (record.type === 'return') {
+      throw new Error('Backup còn chứa phiếu trả hàng nên không thể khôi phục');
+    }
+
+    const purchase = { ...record };
+    delete purchase.type;
+    return purchase as Prisma.PurchaseCreateManyInput;
+  });
+}
+
 function parseBackupData(body: unknown): BackupData | null {
   if (!isObject(body) || !isObject(body.data)) return null;
 
@@ -76,9 +111,9 @@ function parseBackupData(body: unknown): BackupData | null {
     suppliers: (data.suppliers ?? []) as Prisma.SupplierCreateManyInput[],
     sales: (data.sales ?? []) as Prisma.SaleCreateManyInput[],
     saleItems: (data.saleItems ?? []) as Prisma.SaleItemCreateManyInput[],
-    purchases: (data.purchases ?? []) as Prisma.PurchaseCreateManyInput[],
+    purchases: normalizePurchases(data.purchases),
     purchaseItems: (data.purchaseItems ?? []) as Prisma.PurchaseItemCreateManyInput[],
-    debtTransactions: (data.debtTransactions ?? []) as Prisma.DebtTransactionCreateManyInput[],
+    debtTransactions: normalizeDebtTransactions(data.debtTransactions),
     stockMovements: (data.stockMovements ?? []) as Prisma.StockMovementCreateManyInput[],
     expenseCategories: (data.expenseCategories ?? []) as Prisma.ExpenseCategoryCreateManyInput[],
     expenses: (data.expenses ?? []) as Prisma.ExpenseCreateManyInput[],
@@ -131,6 +166,7 @@ export async function POST(request: NextRequest) {
       await tx.employeeShift.deleteMany();
       await tx.expense.deleteMany();
       await tx.stockMovement.deleteMany();
+      await tx.customerPaymentAllocation.deleteMany();
       await tx.debtTransaction.deleteMany();
 
       await tx.purchaseItem.deleteMany();
@@ -193,6 +229,17 @@ export async function POST(request: NextRequest) {
       if (data.expenses?.length) await tx.expense.createMany({ data: data.expenses });
       if (data.employeeShifts?.length) await tx.employeeShift.createMany({ data: data.employeeShifts });
       if (data.salaryPayments?.length) await tx.salaryPayment.createMany({ data: data.salaryPayments });
+
+      const customerIdsWithPayments = Array.from(new Set(
+        data.debtTransactions
+          .filter((transaction) =>
+            transaction.type === 'customer_payment' && Boolean(transaction.customerId)
+          )
+          .map((transaction) => transaction.customerId as string)
+      ));
+      for (const customerId of customerIdsWithPayments) {
+        await reallocateCustomerPayments(tx, customerId);
+      }
     });
 
     return NextResponse.json({ success: true });

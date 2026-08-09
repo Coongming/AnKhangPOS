@@ -9,7 +9,12 @@ export default function BackupPage() {
   const [downloading, setDownloading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [pulling, setPulling] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ message: string; totalRows: number } | null>(null);
+  const [syncResult, setSyncResult] = useState<{
+    message: string;
+    totalRows: number;
+    backupFile?: string;
+    success: boolean;
+  } | null>(null);
   const [pullResult, setPullResult] = useState<{ message: string; totalRows: number; backupFile?: string } | null>(null);
 
   const handleBackup = async () => {
@@ -35,7 +40,7 @@ export default function BackupPage() {
   };
 
   const handleSync = async () => {
-    if (!confirm('Xác nhận đồng bộ dữ liệu local lên Database Online?\n\nDữ liệu trên cloud sẽ bị GHI ĐÈ bằng dữ liệu local hiện tại.')) return;
+    if (!confirm('Xác nhận đồng bộ dữ liệu local lên Database Online?\n\nHệ thống sẽ backup cloud trước, sau đó GHI ĐÈ bằng dữ liệu local hiện tại.')) return;
 
     setSyncing(true);
     setSyncResult(null);
@@ -43,12 +48,30 @@ export default function BackupPage() {
       const res = await fetch('/api/sync', { method: 'POST' });
       const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error || 'Lỗi đồng bộ');
+      if (!res.ok) {
+        if (data.backupFile) {
+          setSyncResult({
+            message: data.error || 'Lỗi đồng bộ',
+            totalRows: 0,
+            backupFile: data.backupFile,
+            success: false,
+          });
+        }
+        throw new Error(data.error || 'Lỗi đồng bộ');
+      }
 
-      setSyncResult({ message: data.message, totalRows: data.totalRows });
+      setSyncResult({
+        message: data.message,
+        totalRows: data.totalRows,
+        backupFile: data.backupFile,
+        success: true,
+      });
       showToast('success', data.message);
-    } catch (err: any) {
-      showToast('error', err.message || 'Đồng bộ thất bại');
+    } catch (error) {
+      showToast(
+        'error',
+        error instanceof Error ? error.message : 'Đồng bộ thất bại'
+      );
     } finally {
       setSyncing(false);
     }
@@ -206,8 +229,13 @@ export default function BackupPage() {
             </button>
 
             {syncResult && (
-              <div style={{ background: 'var(--success-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: 'var(--success)' }}>
-                ✅ {syncResult.message}
+              <div style={{ background: syncResult.success ? 'var(--success-bg)' : 'var(--danger-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 16, fontSize: 13, color: syncResult.success ? 'var(--success)' : 'var(--danger)' }}>
+                {syncResult.message}
+                {syncResult.backupFile && (
+                  <div style={{ marginTop: 6, color: 'var(--text-secondary)' }}>
+                    Backup online trước đồng bộ: {syncResult.backupFile}
+                  </div>
+                )}
               </div>
             )}
 
