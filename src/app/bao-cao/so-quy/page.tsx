@@ -9,7 +9,6 @@ interface CashflowData {
   moneyIn: {
     cashSales: number;
     transferSales: number;
-    customerPayments: number;
     capitalDeposits: number;
     total: number;
   };

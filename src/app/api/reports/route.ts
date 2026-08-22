@@ -128,14 +128,21 @@ export async function GET(request: NextRequest) {
       const sales = await prisma.sale.findMany({
         where: { saleDate: { gte: startDate, lt: endDate }, status: 'completed' },
       });
-      const cashSales = sales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.paidAmount), 0);
-      const transferSales = sales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + Number(s.paidAmount), 0);
+      const cashPaidAtSale = sales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.paidAmount), 0);
+      const transferPaidAtSale = sales.filter(s => s.paymentMethod === 'transfer').reduce((sum, s) => sum + Number(s.paidAmount), 0);
 
-      // Khách trả nợ
+      // Gộp tiền khách trả nợ vào đúng phương thức thu tiền bán hàng.
       const customerPayments = await prisma.debtTransaction.findMany({
         where: { type: 'customer_payment', createdAt: { gte: startDate, lt: endDate } },
       });
-      const totalCustomerPayments = customerPayments.reduce((sum, d) => sum + Math.abs(Number(d.amount)), 0);
+      const cashDebtPayments = customerPayments
+        .filter(payment => payment.paymentMethod !== 'transfer')
+        .reduce((sum, payment) => sum + Math.abs(Number(payment.amount)), 0);
+      const transferDebtPayments = customerPayments
+        .filter(payment => payment.paymentMethod === 'transfer')
+        .reduce((sum, payment) => sum + Math.abs(Number(payment.amount)), 0);
+      const cashSales = cashPaidAtSale + cashDebtPayments;
+      const transferSales = transferPaidAtSale + transferDebtPayments;
 
       // Nộp thêm vốn (cashflow expenses with "Nộp thêm vốn" category)
       const capitalDeposits = await prisma.expense.findMany({
@@ -178,7 +185,7 @@ export async function GET(request: NextRequest) {
       const totalCashflowOut = cashflowExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
 
 
-      const totalIn = cashSales + transferSales + totalCustomerPayments + totalCapitalDeposits;
+      const totalIn = cashSales + transferSales + totalCapitalDeposits;
       const totalOut = totalSupplierPayments + totalOperatingExpenses + totalCashflowOut + totalSalary;
 
       // Chi tiết chi phí vận hành theo danh mục
@@ -199,7 +206,6 @@ export async function GET(request: NextRequest) {
         moneyIn: {
           cashSales,
           transferSales,
-          customerPayments: totalCustomerPayments,
           capitalDeposits: totalCapitalDeposits,
           total: totalIn,
         },

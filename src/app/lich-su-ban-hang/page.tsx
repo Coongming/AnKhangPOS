@@ -37,6 +37,7 @@ export default function SalesHistoryPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchCode, setSearchCode] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -77,6 +78,7 @@ export default function SalesHistoryPage() {
     setLoading(true);
     try {
       const salesRes = await fetch(`/api/sales?${new URLSearchParams({
+        ...(searchCode.trim() && { q: searchCode.trim() }),
         ...(dateFrom && { dateFrom }),
         ...(dateTo && { dateTo }),
         ...(statusFilter && { status: statusFilter }),
@@ -85,7 +87,7 @@ export default function SalesHistoryPage() {
       setSales(await salesRes.json());
     } catch { showToast('error', 'Lỗi tải danh sách hóa đơn'); }
     finally { setLoading(false); }
-  }, [dateFrom, dateTo, statusFilter, paymentMethodFilter, showToast]);
+  }, [searchCode, dateFrom, dateTo, statusFilter, paymentMethodFilter, showToast]);
 
   useEffect(() => { fetchInitialData(); }, [fetchInitialData]);
   useEffect(() => { fetchSales(); }, [fetchSales]);
@@ -251,6 +253,14 @@ export default function SalesHistoryPage() {
 
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
         <div className="toolbar-left" style={{ flexWrap: 'wrap' }}>
+          <div className="search-box" style={{ width: 280 }}>
+            <Search size={16} />
+            <input
+              placeholder="Tìm số hóa đơn hoặc tên khách..."
+              value={searchCode}
+              onChange={e => setSearchCode(e.target.value)}
+            />
+          </div>
           <div style={{ display: 'flex', gap: 4 }}>
             <button
               className={`btn btn-sm ${!dateFrom && !dateTo ? 'btn-primary' : 'btn-ghost'}`}

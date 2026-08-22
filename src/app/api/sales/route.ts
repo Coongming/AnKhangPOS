@@ -129,6 +129,7 @@ async function getAllowNegativeStock(): Promise<boolean> {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+    const q = searchParams.get('q')?.trim() || '';
     const customerId = searchParams.get('customerId') || '';
     const status = searchParams.get('status') || '';
     const paymentMethod = searchParams.get('paymentMethod') || '';
@@ -136,6 +137,12 @@ export async function GET(request: NextRequest) {
     const dateTo = searchParams.get('dateTo') || '';
 
     const where: Record<string, unknown> = {};
+    if (q) {
+      where.OR = [
+        { code: { contains: q, mode: 'insensitive' } },
+        { customer: { name: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
     if (customerId) where.customerId = customerId;
     if (status) where.status = status;
     if (paymentMethod) where.paymentMethod = paymentMethod;
