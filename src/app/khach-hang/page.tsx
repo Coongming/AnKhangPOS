@@ -1,14 +1,34 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { Plus, Search, Users, Edit2, Lock, Unlock, Receipt, Eye } from 'lucide-react';
+import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Plus, Search, Users, Edit2, Lock, Unlock, Receipt, Eye, RefreshCw } from 'lucide-react';
 import { useToast } from '@/components/Toast';
-import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, getEndOfDayVN } from '@/lib/utils';
+import {
+  CUSTOMER_RECENCY_GROUPS, selectCustomersByRecency,
+  type CustomerRecency, type CustomerRecencyFilter, type CustomerStatusFilter,
+} from '@/lib/customer-recency';
+import styles from './customers.module.css';
 
 interface Customer {
   id: string; code: string; name: string; phone: string | null;
   address: string | null; notes: string | null; debt: number; isActive: boolean;
+  lastPurchaseDate: string | null; daysSinceLastPurchase: number | null; recency: CustomerRecency;
 }
+
+interface CustomerReport {
+  asOf: string;
+  customers: Customer[];
+}
+
+const extraFilters: Array<{ value: CustomerRecencyFilter; label: string }> = [
+  { value: 'all', label: 'Tất cả' },
+  { value: 'older', label: 'Trên 4 tháng' },
+  { value: 'never', label: 'Chưa từng mua' },
+];
+const dateVN = new Intl.DateTimeFormat('vi-VN', {
+  timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric',
+});
 
 interface Sale {
   id: string; code: string; saleDate: string; totalAmount: number; paidAmount: number;
@@ -23,9 +43,12 @@ interface DebtPayment {
 
 export default function CustomersPage() {
   const { showToast } = useToast();
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [report, setReport] = useState<CustomerReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
+  const [recency, setRecency] = useState<CustomerRecencyFilter>('all');
+  const [status, setStatus] = useState<CustomerStatusFilter>('all');
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', address: '', notes: '' });
@@ -33,19 +56,55 @@ export default function CustomersPage() {
   const [customerSales, setCustomerSales] = useState<Sale[]>([]);
   const [customerPayments, setCustomerPayments] = useState<DebtPayment[]>([]);
   const [loadingSales, setLoadingSales] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
+  const reportRequest = useRef<AbortController | null>(null);
+  const historyRequest = useRef<AbortController | null>(null);
+
+  const selection = useMemo(() => selectCustomersByRecency(
+    report?.customers ?? [], search, status, recency,
+  ), [report, search, status, recency]);
+  const customers = selection.customers;
 
   const fetchData = useCallback(async () => {
+    reportRequest.current?.abort();
+    const controller = new AbortController();
+    reportRequest.current = controller;
+    setLoading(true);
+    setLoadError(false);
     try {
-      const params = new URLSearchParams();
-      if (search) params.set('search', search);
-      const res = await fetch(`/api/customers?${params}`);
-      setCustomers(await res.json());
-    } catch { showToast('error', 'Lỗi tải dữ liệu'); }
-    finally { setLoading(false); }
-  }, [search, showToast]);
+      const res = await fetch('/api/customers/recency', { cache: 'no-store', signal: controller.signal });
+      if (!res.ok) throw new Error('Unable to load customer report');
+      const data: CustomerReport = await res.json();
+      if (!controller.signal.aborted) setReport(data);
+    } catch {
+      if (!controller.signal.aborted) {
+        setReport(null);
+        setLoadError(true);
+        showToast('error', 'Lỗi tải thống kê khách hàng');
+      }
+    } finally { if (!controller.signal.aborted) setLoading(false); }
+  }, [showToast]);
 
-  useEffect(() => { const t = setTimeout(fetchData, 300); return () => clearTimeout(t); }, [fetchData]);
+  useEffect(() => {
+    void fetchData();
+    const refresh = () => { if (document.visibilityState === 'visible') void fetchData(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      reportRequest.current?.abort();
+      historyRequest.current?.abort();
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [fetchData]);
+
+  useEffect(() => {
+    if (!report) return;
+    const asOf = new Date(report.asOf);
+    const timer = setTimeout(fetchData, getEndOfDayVN(asOf).getTime() - asOf.getTime() + 1000);
+    return () => clearTimeout(timer);
+  }, [report, fetchData]);
 
   const openCreate = () => { setEditing(null); setForm({ name: '', phone: '', address: '', notes: '' }); setShowModal(true); };
   const openEdit = (c: Customer) => { setEditing(c); setForm({ name: c.name, phone: c.phone || '', address: c.address || '', notes: c.notes || '' }); setShowModal(true); };
@@ -67,66 +126,119 @@ export default function CustomersPage() {
 
   const toggleActive = async (c: Customer) => {
     try {
-      await fetch('/api/customers', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: c.id, isActive: !c.isActive }) });
+      const res = await fetch('/api/customers', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: c.id, isActive: !c.isActive }) });
+      if (!res.ok) throw new Error('Unable to update customer');
       showToast('success', c.isActive ? 'Đã tạm ngừng' : 'Đã kích hoạt lại');
       fetchData();
     } catch { showToast('error', 'Lỗi cập nhật'); }
   };
 
   const openCustomerHistory = async (c: Customer) => {
+    historyRequest.current?.abort();
+    const controller = new AbortController();
+    historyRequest.current = controller;
     setViewCustomer(c);
     setLoadingSales(true);
+    setHistoryError(false);
+    setCustomerSales([]);
+    setCustomerPayments([]);
     setExpandedSaleId(null);
     try {
       const [salesRes, debtsRes] = await Promise.all([
-        fetch(`/api/sales?customerId=${c.id}`),
-        fetch(`/api/debts?type=customer&entityId=${c.id}`),
+        fetch(`/api/sales?customerId=${c.id}`, { signal: controller.signal, cache: 'no-store' }),
+        fetch(`/api/debts?type=customer&entityId=${c.id}`, { signal: controller.signal, cache: 'no-store' }),
       ]);
-      setCustomerSales(await salesRes.json());
+      if (!salesRes.ok || !debtsRes.ok) throw new Error('Unable to load customer history');
+      const sales: Sale[] = await salesRes.json();
       const allDebts: DebtPayment[] = await debtsRes.json();
-      setCustomerPayments(allDebts.filter(d => d.type === 'customer_payment'));
-    } catch { showToast('error', 'Lỗi tải lịch sử mua hàng'); }
-    finally { setLoadingSales(false); }
+      if (!controller.signal.aborted) {
+        setCustomerSales(sales);
+        setCustomerPayments(allDebts.filter(d => d.type === 'customer_payment'));
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        setHistoryError(true);
+        showToast('error', 'Lỗi tải lịch sử mua hàng');
+      }
+    } finally { if (!controller.signal.aborted) setLoadingSales(false); }
   };
 
-  return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-heading)' }}>Quản lý khách hàng</h2>
-        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{customers.length} khách hàng</p>
-      </div>
-      <div className="toolbar">
-        <div className="toolbar-left">
-          <div className="search-box" style={{ maxWidth: 320 }}>
-            <Search />
-            <input placeholder="Tìm theo tên, SĐT, mã..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-        </div>
-        <div className="toolbar-right">
-          <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Thêm khách hàng</button>
-        </div>
-      </div>
+  const closeHistory = () => { historyRequest.current?.abort(); setViewCustomer(null); };
+  const countLabel = (value: CustomerRecencyFilter) => loading || loadError ? '—' : selection.counts[value];
+  const selectedLabel = [...CUSTOMER_RECENCY_GROUPS, ...extraFilters].find(group => group.value === recency)?.label;
 
-      {loading ? <div className="loading-page"><div className="loading-spinner" /></div> : customers.length === 0 ? (
-        <div className="card"><div className="empty-state"><Users /><h3>Chưa có khách hàng</h3></div></div>
+  return (
+    <div className={styles.page}>
+      <div className={styles.heading}>
+        <div>
+          <h2>Quản lý khách hàng</h2>
+          <p>{report ? `${report.customers.length} khách hàng` : 'Khách hàng'}</p>
+        </div>
+        <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Thêm khách hàng</button>
+      </div>
+      <section className={styles.summary} aria-label="Thống kê lần mua gần nhất" aria-busy={loading}>
+        <div className={styles.summaryHeading}>
+          <h3>Lần mua gần nhất</h3>
+          {report && <span className={styles.summaryDate}>Tính đến {dateVN.format(new Date(report.asOf))}</span>}
+        </div>
+        <div className={styles.groups}>
+          {CUSTOMER_RECENCY_GROUPS.map(group => (
+            <button key={group.value} type="button" className={styles.group}
+              aria-pressed={recency === group.value} onClick={() => setRecency(group.value)}>
+              <span className={styles.groupLabel}>{group.label}</span>
+              <span className={styles.groupCount}>{countLabel(group.value)}</span>
+            </button>
+          ))}
+        </div>
+        <div className={styles.filters} role="group" aria-label="Nhóm khách hàng khác">
+          {extraFilters.map(group => (
+            <button key={group.value} type="button" className={styles.filter}
+              aria-pressed={recency === group.value} onClick={() => setRecency(group.value)}>
+              {group.label}<span className={styles.filterCount}>{countLabel(group.value)}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+      <div className={styles.toolbar}>
+        <div className={`search-box ${styles.search}`}>
+          <Search aria-hidden="true" />
+          <input type="search" aria-label="Tìm khách hàng" placeholder="Tìm theo tên, SĐT, mã..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <select className={`form-select ${styles.status}`} aria-label="Trạng thái khách hàng"
+          value={status} onChange={e => setStatus(e.target.value as CustomerStatusFilter)}>
+          <option value="all">Tất cả trạng thái</option>
+          <option value="active">Đang hoạt động</option>
+          <option value="inactive">Tạm ngừng</option>
+        </select>
+        <button className="btn btn-ghost" type="button" title="Làm mới thống kê" aria-label="Làm mới thống kê"
+          disabled={loading} onClick={() => void fetchData()}><RefreshCw size={16} /></button>
+      </div>
+      {!loading && !loadError && <p className={styles.resultCount} role="status">{selectedLabel}: {customers.length} khách hàng</p>}
+
+      {loading ? <div className="loading-page" role="status" aria-label="Đang tải khách hàng"><div className="loading-spinner" /></div> : loadError ? (
+        <div className={styles.empty} role="alert">Không tải được thống kê khách hàng. <button className="btn btn-ghost btn-sm" onClick={() => void fetchData()}><RefreshCw size={14} /> Thử lại</button></div>
+      ) : customers.length === 0 ? (
+        <div className="empty-state"><Users /><h3>{report?.customers.length === 0 ? 'Chưa có khách hàng' : 'Không có khách hàng phù hợp'}</h3></div>
       ) : (
         <div className="table-wrapper">
-          <table className="table">
-            <thead><tr><th>Mã</th><th>Tên</th><th>SĐT</th><th>Địa chỉ</th><th className="text-right">Công nợ</th><th>Trạng thái</th><th className="text-center">Thao tác</th></tr></thead>
+          <table className={`table ${styles.table}`}>
+            <thead><tr><th>Mã</th><th>Tên</th><th>SĐT</th><th>Mua gần nhất</th><th className="text-right">Số ngày chưa mua lại</th><th>Địa chỉ</th><th className="text-right">Công nợ</th><th>Trạng thái</th><th className="text-center">Thao tác</th></tr></thead>
             <tbody>
               {customers.map((c) => (
                 <tr key={c.id} style={{ opacity: c.isActive ? 1 : 0.5 }}>
-                  <td style={{ fontWeight: 600, color: 'var(--accent)', cursor: 'pointer' }} onClick={() => openCustomerHistory(c)}>{c.code}</td>
+                  <td><button className={styles.code} title={`Lịch sử mua hàng của ${c.name}`} onClick={() => void openCustomerHistory(c)}>{c.code}</button></td>
                   <td style={{ fontWeight: 600 }}>{c.name}</td>
                   <td>{c.phone || '—'}</td>
+                  <td className={styles.nowrap}>{c.lastPurchaseDate ? dateVN.format(new Date(c.lastPurchaseDate)) : 'Chưa từng mua'}</td>
+                  <td className={`text-right ${styles.nowrap}`}>{c.daysSinceLastPurchase === null ? '—' : `${c.daysSinceLastPurchase} ngày`}</td>
                   <td className="text-muted">{c.address || '—'}</td>
-                  <td className="text-right" style={{ fontWeight: 600, color: c.debt > 0 ? 'var(--warning)' : 'var(--text-primary)' }}>{formatCurrency(c.debt)}</td>
-                  <td><span className={`badge ${c.isActive ? 'badge-success' : 'badge-danger'}`}>{c.isActive ? 'Hoạt động' : 'Tạm ngừng'}</span></td>
+                  <td className={`text-right ${styles.nowrap}`} style={{ fontWeight: 600, color: c.debt > 0 ? 'var(--warning)' : 'var(--text-primary)' }}>{formatCurrency(c.debt)}</td>
+                  <td className={styles.nowrap}><span className={`badge ${c.isActive ? 'badge-success' : 'badge-danger'}`}>{c.isActive ? 'Hoạt động' : 'Tạm ngừng'}</span></td>
                   <td className="text-center">
                     <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                       <button className="btn btn-ghost btn-sm" title="Lịch sử mua hàng" onClick={() => openCustomerHistory(c)}><Eye size={14} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openEdit(c)}><Edit2 size={14} /></button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => toggleActive(c)}>{c.isActive ? <Lock size={14} /> : <Unlock size={14} />}</button>
+                      <button className="btn btn-ghost btn-sm" title="Sửa khách hàng" onClick={() => openEdit(c)}><Edit2 size={14} /></button>
+                      <button className="btn btn-ghost btn-sm" title={c.isActive ? 'Tạm ngừng khách hàng' : 'Kích hoạt khách hàng'} onClick={() => toggleActive(c)}>{c.isActive ? <Lock size={14} /> : <Unlock size={14} />}</button>
                     </div>
                   </td>
                 </tr>
@@ -159,14 +271,14 @@ export default function CustomersPage() {
       )}
 
       {viewCustomer && (
-        <div className="modal-overlay" onClick={() => setViewCustomer(null)}>
+        <div className="modal-overlay" onClick={closeHistory}>
           <div className="modal modal-xl" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>
                 <Receipt size={18} style={{ display: 'inline', marginRight: 8, verticalAlign: -3 }} />
                 Lịch sử mua hàng — {viewCustomer.name}
               </h3>
-              <button className="modal-close" onClick={() => setViewCustomer(null)}>✕</button>
+              <button className="modal-close" aria-label="Đóng lịch sử mua hàng" onClick={closeHistory}>✕</button>
             </div>
             <div className="modal-body">
               {/* Customer Info */}
@@ -204,6 +316,8 @@ export default function CustomersPage() {
               {/* Sales Table */}
               {loadingSales ? (
                 <div className="loading-page" style={{ minHeight: 150 }}><div className="loading-spinner" /></div>
+              ) : historyError ? (
+                <div className={styles.empty} role="alert">Không tải được lịch sử mua hàng. <button className="btn btn-ghost btn-sm" onClick={() => void openCustomerHistory(viewCustomer)}><RefreshCw size={14} /> Thử lại</button></div>
               ) : customerSales.length === 0 ? (
                 <div className="empty-state">
                   <Receipt />
@@ -226,7 +340,7 @@ export default function CustomersPage() {
                     </thead>
                     <tbody>
                       {customerSales.map((s) => (
-                        <>
+                        <Fragment key={s.id}>
                         <tr key={s.id} style={{ opacity: s.status === 'cancelled' ? 0.5 : 1, cursor: 'pointer' }} onClick={() => setExpandedSaleId(expandedSaleId === s.id ? null : s.id)}>
                           <td style={{ fontWeight: 600, color: 'var(--accent)' }}>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -278,7 +392,7 @@ export default function CustomersPage() {
                             </td>
                           </tr>
                         )}
-                        </>
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>
